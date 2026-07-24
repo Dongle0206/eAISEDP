@@ -1,0 +1,44 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Maven
+target/
+build/
+
+# Java
+*.class
+hs_err_pid*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+
+# 临时
+*.tmp
+*.bak
+
+# 配置中的敏感信息
+application-prod.yml
+application-local.yml
+
+# 体系配置用 submodule
+agents-config/
+eAISEDP-system/
+
+# 手册与设计稿 —— 纳入 docs 管理（取消忽略）
+# _manual/
+# *.pdf
+
+# node_modules（_manual 下的 PDF 构建依赖）
+node_modules/
+package.json
+package-lock.json

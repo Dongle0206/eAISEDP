@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>企业级软件工程多 Agent 协同运作指导手册</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { margin: 0; padding: 0; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1a202c; background: #ffffff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  :root { --primary: #1e3a5f; --primary-light: #2c5282; --accent: #c05621; --text: #1a202c; --muted: #4a5568; --light: #f7fafc; --border: #cbd5e0; --danger: #9b2c2c; }
+  .page { width: 210mm; min-height: 297mm; padding: 22mm 20mm 20mm 20mm; page-break-after: always; position: relative; background: #ffffff; }
+  .page:last-child { page-break-after: auto; }
+  .cover { padding: 0; background: linear-gradient(135deg, #1a365d 0%, #2c5282 100%); color: #ffffff; }
+  .cover-inner { padding: 30mm 22mm; height: 297mm; display: flex; flex-direction: column; }
+  .cover-kicker { font-size: 13pt; letter-spacing: 4pt; color: rgba(255,255,255,0.65); margin-bottom: 14mm; font-weight: 300; }
+  .cover-title { font-size: 34pt; font-weight: 800; line-height: 1.25; margin-bottom: 8mm; letter-spacing: 1pt; }
+  .cover-subtitle { font-size: 15pt; font-weight: 400; color: rgba(255,255,255,0.85); margin-bottom: 18mm; line-height: 1.6; }
+  .cover-rule { width: 60mm; height: 3pt; background: var(--accent); margin-bottom: 12mm; }
+  .cover-summary { font-size: 11.5pt; line-height: 1.9; color: rgba(255,255,255,0.82); max-width: 145mm; font-weight: 300; }
+  .cover-meta { margin-top: auto; border-top: 1pt solid rgba(255,255,255,0.2); padding-top: 8mm; font-size: 10.5pt; color: rgba(255,255,255,0.7); display: flex; justify-content: space-between; }
+  .cover-meta strong { color: #ffffff; font-weight: 500; }
+  h1.section { font-size: 20pt; color: var(--primary); border-bottom: 2.5pt solid var(--primary); padding-bottom: 4mm; margin-bottom: 7mm; font-weight: 700; }
+  h2 { font-size: 14pt; color: var(--primary-light); margin-top: 6mm; margin-bottom: 3mm; font-weight: 600; border-left: 4pt solid var(--accent); padding-left: 3mm; }
+  h3 { font-size: 12pt; color: var(--text); margin-top: 4mm; margin-bottom: 2mm; font-weight: 600; }
+  p { font-size: 10.5pt; line-height: 1.75; margin-bottom: 2.5mm; text-align: justify; }
+  ul, ol { margin: 2mm 0 3mm 6mm; }
+  li { font-size: 10.5pt; line-height: 1.7; margin-bottom: 1.2mm; }
+  strong { color: var(--primary); font-weight: 600; }
+  code { font-family: Consolas, monospace; background: var(--light); padding: 0.5mm 1.5mm; border-radius: 1.5mm; font-size: 9.5pt; color: var(--accent); }
+  .code-block { background: #2d3748; color: #e2e8f0; padding: 3mm 4mm; border-radius: 2mm; font-family: Consolas, monospace; font-size: 9pt; line-height: 1.6; margin: 3mm 0; white-space: pre-wrap; page-break-inside: avoid; }
+  table { width: 100%; border-collapse: collapse; margin: 3mm 0 4mm 0; font-size: 9.5pt; }
+  th { background: var(--primary); color: #ffffff; padding: 2.5mm 3mm; text-align: left; font-weight: 600; }
+  td { padding: 2.2mm 3mm; border: 0.5pt solid var(--border); vertical-align: top; line-height: 1.6; }
+  tr:nth-child(even) td { background: var(--light); }
+  tr { page-break-inside: avoid; }
+  .callout { border-left: 4pt solid var(--accent); background: #fffaf0; padding: 3mm 4mm; margin: 3mm 0; border-radius: 0 2mm 2mm 0; page-break-inside: avoid; }
+  .callout p { font-size: 10pt; margin-bottom: 1.5mm; }
+  .callout-title { font-weight: 700; color: var(--accent); font-size: 10.5pt; margin-bottom: 1.5mm; }
+  .note { border-left: 4pt solid var(--primary-light); background: #ebf8ff; padding: 3mm 4mm; margin: 3mm 0; border-radius: 0 2mm 2mm 0; page-break-inside: avoid; }
+  .note p { font-size: 10pt; margin-bottom: 1.5mm; }
+  .warn { border-left: 4pt solid var(--danger); background: #fff5f5; padding: 3mm 4mm; margin: 3mm 0; border-radius: 0 2mm 2mm 0; page-break-inside: avoid; }
+  .warn p { font-size: 10pt; margin-bottom: 1.5mm; }
+  .band { background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%); color: #ffffff; padding: 4mm 5mm; border-radius: 2mm; margin: 3mm 0; page-break-inside: avoid; }
+  .band p { color: #ffffff; font-size: 10.5pt; margin-bottom: 0; }
+  .band strong { color: #ffffff; }
+  .flow { background: var(--light); border: 0.5pt solid var(--border); border-radius: 2mm; padding: 4mm 5mm; margin: 4mm 0; font-family: Consolas, monospace; font-size: 8.8pt; line-height: 1.65; white-space: pre; color: var(--text); page-break-inside: avoid; }
+  .footer { position: absolute; bottom: 10mm; left: 20mm; right: 20mm; border-top: 0.4pt solid var(--border); padding-top: 2mm; font-size: 8.5pt; color: var(--muted); display: flex; justify-content: space-between; }
+  .role-card { border: 0.8pt solid var(--border); border-radius: 2mm; padding: 3.5mm 5mm; margin: 2.5mm 0; page-break-inside: avoid; background: #ffffff; }
+  .role-card.l1 { border-left: 5pt solid var(--primary); }
+  .role-card.l2 { border-left: 5pt solid var(--accent); }
+  .role-card.l3 { border-left: 5pt solid #6b46c1; }
+  .role-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.5mm; border-bottom: 0.5pt solid var(--border); padding-bottom: 1.5mm; }
+  .role-name { font-size: 12pt; font-weight: 700; color: var(--primary); }
+  .role-meta { font-size: 9pt; color: var(--muted); }
+  .role-card p { font-size: 9.8pt; margin-bottom: 1mm; }
+</style>
+</head>
+<body>
+
+<div class="page cover">
+  <div class="cover-inner">
+    <div>
+      <div class="cover-kicker">Enterprise Software Engineering · Multi-Agent Collaboration</div>
+      <div class="cover-title">企业级软件工程<br>多 Agent 协同运作指导手册</div>
+      <div class="cover-rule"></div>
+      <div class="cover-subtitle">三层架构体系——战略层 · 项目群层 · 战术层<br>22 个角色 · 26 个 skills · 端到端规范化交付</div>
+      <div class="cover-summary">
+        本手册沉淀了一套面向企业级软件工程智能化交付的三层多 Agent 协同体系：L3 战略层（企业架构、技术战略、投资治理、GRC 治理监督）、L2 项目群层（多项目协同、工程标准化、交付效能度量、数据治理）、L1 战术层（14 个专家子智能体覆盖需求→交付→数据闭环全生命周期）。涵盖设计方法论、三层协作机制、商用治理（可靠性/成本/可观测/集成）、落地实现步骤与一线实战经验，可作为企业级标准复用。
+      </div>
+    </div>
+    <div class="cover-meta">
+      <div><strong>版本</strong> v2.1 · 企业级完整版</div>
+      <div><strong>发布</strong> 2026-07</div>
+      <div><strong>类型</strong> 方法论 · 实施指导</div>
+    </div>
+  </div>
+</div>
+
+<div class="page">
+  <h1 class="section">目录</h1>
+  <p style="font-size:11pt;line-height:2.2;">
+  一、为什么需要多 Agent 协同 ······················ 03<br>
+  二、三层架构体系总览 ····························· 04<br>
+  三、L3 战略层（3 角色 + 治理监督）················ 06<br>
+  四、L2 项目群层（4 角色 + 横向能力）·············· 08<br>
+  五、L1 战术层（14 角色 + 编排者方法论）·········· 11<br>
+  六、流程沉淀与数据治理闭环 ······················· 16<br>
+  七、商用治理体系（五道坎 + 四元能力）············ 18<br>
+  八、能力插件机制与防膨胀 ························· 21<br>
+  九、从 0 到 1 落地：六步实施法 ···················· 22<br>
+  十、踩坑实录与反模式 ····························· 24<br>
+  十一、适用性、IDE 迁移与小结 ····················· 26</p>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>目录</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">一、为什么需要多 Agent 协同</h1>
+  <p>单 Agent 模式下，一个 AI 同时扮演需求、设计、编码、测试、部署所有角色，企业级场景下系统性痛点：</p>
+  <table>
+    <tr><th style="width:22%">痛点</th><th>表现</th><th style="width:28%">后果</th></tr>
+    <tr><td><strong>角色串味</strong></td><td>写完代码自己评审，等于没评审</td><td>质量门禁失效</td></tr>
+    <tr><td><strong>上下文爆炸</strong></td><td>一个会话塞 PRD+代码+测试，越往后越糊</td><td>后半程产出质量陡降</td></tr>
+    <tr><td><strong>质量无门禁</strong></td><td>没有强制卡点，AI 自报"已完成"就算完成</td><td>虚报、纸面通过、假修复被部署</td></tr>
+    <tr><td><strong>经验不复用</strong></td><td>每次都从零开始，踩过的坑反复踩</td><td>团队水平不沉淀</td></tr>
+    <tr><td><strong>协作不可审计</strong></td><td>改了什么、谁改的、为何改，全凭一张嘴</td><td>无法追溯、无法复盘</td></tr>
+    <tr><td><strong>专业维度缺失</strong></td><td>一个全栈 AI 兼顾不了安全/性能/数据/治理</td><td>企业级质量短板</td></tr>
+  </table>
+  <div class="band">
+    <p><strong>核心思想</strong>：把一个全能 AI 拆成有明确分工的专家子智能体，由编排者统一调度，按流水线交付。配合强制门禁、模型隔离、磁盘事实核对、商用治理，让质量不靠自觉——从"能用"升级到"企业敢用、能持续经营"。</p>
+  </div>
+  <h2>本手册的定位</h2>
+  <p>不是某个项目配置文档，而是一套<strong>与具体项目、具体 IDE 解耦</strong>的企业级协同范式。所有项目专属约定（技术栈、包结构、构建工具）不硬编码，由项目级 <code>CLAUDE.md</code> 运行时注入——同一套配置可用于任何规模项目。</p>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>01 · 为什么需要</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">二、三层架构体系总览</h1>
+  <p>单层协同（只有 L1）只能完成"一个需求到一个交付"。企业级大型项目/变革项目需要<strong>自上而下协同、端到端规范化</strong>——这要求在 L1 之上叠加 L2（项目群层）和 L3（战略层）。</p>
+  <div class="flow">┌──────────────────────────────────────────────────────────┐
+│ L3 战略层   /企业架构  /战略投资  /GRC治理                  │
+│   EA企业架构师 · 战略分析师 · GRC治理主理                   │
+│   职责: 架构蓝图 · 技术战略 · ROI · 治理审计 · 风险 · 合规  │
+└────────────────────────────┬─────────────────────────────┘
+                             │ 下达战略约束 & 架构原则 & 治理监督
+┌────────────────────────────┴─────────────────────────────┐
+│ L2 项目群层  /项目群协同                                  │
+│   PgM项目群经理 · 标准负责人 · VSM价值流 · Steward数据管家 │
+│   职责: 项目群拆解 · 标准化 · 效能度量 · 数据治理          │
+└────────────────────────────┬─────────────────────────────┘
+                             │ 派发子项目 & 下达标准 & 数据治理
+┌────────────────────────────┴─────────────────────────────┐
+│ L1 战术层   /团队开发                                      │
+│   编排者 → PO UX SE BA DBA Dev Reviewer Security QA Perf   │
+│           SRE Analyst Ops PM (14 角色)                     │
+│   职责: 单 case 全生命周期交付                              │
+└──────────────────────────────────────────────────────────┘
+                             │ 横向贯穿
+┌──────────────────────────────────────────────────────────┐
+│ 跨层公共能力  knowledge-mgmt/dependency-impact/compliance  │
+│               business-process/change-mgmt 等 11 个 skills │
+└──────────────────────────────────────────────────────────┘</div>
+  <h2>三层定位与指挥链</h2>
+  <table>
+    <tr><th>层级</th><th>回答的问题</th><th>"编排者"</th><th>调度对象</th><th>触发</th></tr>
+    <tr><td><strong>L3 战略</strong></td><td>做不做？投多少？架构怎么定？合规吗？</td><td>EA / Strategy / GRC</td><td>定义原则给 L2</td><td>/企业架构 /战略投资 定期GRC</td></tr>
+    <tr><td><strong>L2 项目群</strong></td><td>多项目怎么协同？标准？数据？</td><td>PgM</td><td>多个 L1 编排者</td><td>/项目群协同</td></tr>
+    <tr><td><strong>L1 战术</strong></td><td>一个需求怎么交付？</td><td>team-orchestrator</td><td>14 个角色</td><td>/团队开发</td></tr>
+  </table>
+  <div class="band">
+    <p><strong>指挥链清晰解耦</strong>：EA/Strategy/GRC → PgM → 编排者 → 14 角色。每层只调度下一层，不跨层。三层独立命令触发，用哪层调哪层。</p>
+  </div>
+  <h2>体系规模</h2>
+  <p><strong>22 个角色 + 26 个 skills</strong>（含 mlops 插件）+ 4 个斜杠命令。L3 战略层 3 角色，L2 项目群层 4 角色，L1 战术层 14 角色（核心 9 + 专项 5）+ 1 插件（mlops）。</p>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>02 · 三层总览</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">三、L3 战略层（3 角色）</h1>
+  <p>L3 是企业级变革项目的起点——不是"做什么需求"，而是"为什么做、做不做、架构怎么定、合不合规、风险可控吗"。向下传导架构原则与治理监督。</p>
+
+  <div class="role-card l3">
+    <div class="role-head"><span class="role-name">EA · 企业架构师</span><span class="role-meta">opus · /企业架构</span></div>
+    <p><strong>定位</strong>：定义整个企业架构蓝图与演进路线，是<strong>流程架构的主导者</strong>（TOGAF 业务架构层）。</p>
+    <p><strong>产出</strong>：业务/应用/数据/技术四层架构蓝图、架构原则集、演进路线、ADR、流程架构（调用 business-process skill）。</p>
+    <p><strong>关键</strong>：与 Steward 协同（EA 定数据架构方向，Steward 落地治理）；流程 gap 衍生变革项目给 PgM。</p>
+  </div>
+
+  <div class="role-card l3">
+    <div class="role-head"><span class="role-name">Strategy · 战略投资分析师</span><span class="role-meta">opus · /战略投资</span></div>
+    <p><strong>定位</strong>：回答"做不做、投多少、先做哪个、值不值"。看商业价值与技术投资，非产品行为数据。</p>
+    <p><strong>产出</strong>：可行性研究（技术/经济/运营/时间四维）、ROI 商业案例、投资优先级、技术雷达（Adopt/Trial/Assess/Hold）。</p>
+    <p><strong>人机边界</strong>：自主产出方案；立项与预算分配保留人工确认。</p>
+  </div>
+
+  <div class="role-card l3">
+    <div class="role-head"><span class="role-name">GRC · 治理/风险/合规主理</span><span class="role-meta">opus · 治理监督层</span></div>
+    <p><strong>定位</strong>：体系"治理闭环的兜底人"。基于 COBIT 2019/COSO ERM/ITIL 4/ISO 31000。是体系的"审计委员会+风控委员会"。</p>
+    <p><strong>产出</strong>：治理审视报告、治理审计报告、企业风险登记册、控制有效性评估、合规状态报告。</p>
+    <p><strong>六职能</strong>：治理策略审视 / 治理审计 / 企业风险评估 / 合规治理 / 控制有效性评估 / 持续改进驱动。</p>
+    <p><strong>人机边界（硬约束）</strong>：AI 做数据采集/规则检查/风险预警/报告；<strong>审计签字/内控认证/处罚决定/重大风险处置保留人工</strong>（法定人责）。</p>
+    <p><strong>边界</strong>：不下场执行（EA/Standards/Reviewer 执行），不替代法定人责。</p>
+  </div>
+
+  <h2>L3 skills</h2>
+  <p><code>enterprise-architecture</code>（四层架构/ADR）· <code>tech-radar</code>（技术雷达/ROI）· <code>enterprise-grc</code>（COBIT/COSO/ITIL 裁剪）</p>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>03 · L3 战略层</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">四、L2 项目群层（4 角色）</h1>
+  <p>L2 是当前体系<strong>最大的协同枢纽</strong>——单编排者只管一条线，企业级是多项目并行、相互依赖、共享资源、需统一标准与数据治理。L2 的 PgM 调度多个 L1 编排者。</p>
+
+  <div class="role-card l2">
+    <div class="role-head"><span class="role-name">PgM · 项目群经理</span><span class="role-meta">opus · L2 的"编排者" · /项目群协同</span></div>
+    <p><strong>定位</strong>：像 L1 编排者调度 14 角色，PgM 调度<strong>多个 team-orchestrator</strong>。把战略拆成项目群，派发子项目，协调依赖与里程碑。</p>
+    <p><strong>产出</strong>：项目群路线图、依赖图、里程碑计划（milestones.md）、资源分配、跨项目冲突裁决。</p>
+  </div>
+
+  <div class="role-card l2">
+    <div class="role-head"><span class="role-name">Standards · 方法论标准负责人</span><span class="role-meta">sonnet · 唯一"定义规范"角色</span></div>
+    <p><strong>定位</strong>：整套体系唯一"定义规范"的角色——其他都"遵循规范"，本角色"编写维护规范"。</p>
+    <p><strong>产出</strong>：CLAUDE.md 治理、工程标准手册、质量门禁定义、模板库、API 契约规范。把 EA 架构原则翻译成 L1 可执行标准。</p>
+  </div>
+
+  <div class="role-card l2">
+    <div class="role-head"><span class="role-name">VSM · 价值流分析师</span><span class="role-meta">sonnet · PgM 的"眼睛"</span></div>
+    <p><strong>定位</strong>：DORA 四指标 + 流动效率度量整个项目群交付效能，识别瓶颈。是 PgM 的"眼睛"。</p>
+    <p><strong>产出</strong>：DORA 报告（部署频率/变更前置时间/变更失败率/恢复时间）、流动效率、瓶颈诊断。</p>
+  </div>
+
+  <div class="role-card l2">
+    <div class="role-head"><span class="role-name">Steward · 数据管家</span><span class="role-meta">sonnet · 企业数据资产主理</span></div>
+    <p><strong>定位</strong>：企业级数据资产<strong>主理人</strong>——管数据的治理与价值化。数据治理失败头号原因是无主理人，本角色是兜底责任人。</p>
+    <p><strong>产出</strong>：数据标准、质量规则、元数据字典、主数据管理方案、数据目录、数据资产化方案。</p>
+    <p><strong>边界</strong>：与 DBA（数据存储）/Analyst（产品度量）/EA（架构方向）零重叠。Steward 管治理与价值化。</p>
+  </div>
+
+  <h2>L2 skills</h2>
+  <p><code>program-management</code>（项目群治理+里程碑协议）· <code>engineering-standards</code>（标准翻译）· <code>devops-metrics</code>（DORA）· <code>data-governance</code>（DAMA 裁剪）</p>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>04 · L2 项目群层</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">五、L1 战术层（14 角色）</h1>
+  <h2>5.1 核心角色（9 个，全程参与）</h2>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">PO · 产品经理</span><span class="role-meta">opus</span></div>
+    <p><strong>职责</strong>：PRD+验收标准（必须可测）。<strong>强化</strong>：产品管理（路线图/RICE 优先级/竞品，调用 product-management）+ 需求工程（全生命周期/变更控制/追溯，调用 requirements-engineering）。不只是 PRD 输出员，是产品管理者。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">UX · 交互设计师</span><span class="role-meta">opus</span></div>
+    <p><strong>职责</strong>：PRD 转 ASCII 线框图 + 结构化界面规格，开发前与用户对齐。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">SE · 系统工程师（技术主导）</span><span class="role-meta">opus · 接编排者架构职责</span></div>
+    <p><strong>定位</strong>：L1 战术层<strong>技术主导</strong>。编排者管流程，SE 管技术（架构职责从编排者剥离给 SE）。</p>
+    <p><strong>职责</strong>：技术方案设计（阶段1.8）、开发全程质量主导、关键技术问题攻坚。</p>
+    <p><strong>边界</strong>：不写业务代码（Dev）、不做规范检查（Reviewer）。SE 纵向贯穿技术全程，其他专项角色横向切片。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">BA · 需求分析员</span><span class="role-meta">sonnet</span></div>
+    <p><strong>职责</strong>：PRD 拆技术任务清单（标类型/依赖/接口契约/可独立验收）+ 变更影响评估。读 DBA 数据设计 + SE 技术方案。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">Dev · 全栈开发</span><span class="role-meta">sonnet · 不提交 git</span></div>
+    <p><strong>职责</strong>：按任务清单和接口契约、遵循项目编码规范写代码。<strong>防虚报</strong>：回报告前 git diff --stat 自证改动落地。</p>
+  </div>
+
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>05 · L1 角色（1/3）</span></div>
+</div>
+
+<div class="page">
+  <h2 style="margin-top:0;">5.1 核心角色（续）</h2>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">Reviewer · 代码评审</span><span class="role-meta">opus · 须与 Dev 不同模型</span></div>
+    <p><strong>职责</strong>：磁盘事实核对（git diff 与 Dev 报告比对）+ 规范符合度门禁。与 Dev 模型不同、角色独立、互不通信。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">QA · 测试工程师</span><span class="role-meta">sonnet</span></div>
+    <p><strong>职责</strong>：按 AC 反推用例（正常/边界/异常）。<strong>磁盘事实核对</strong>：预期基于磁盘真实代码推演，不抄 Dev 报告。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">Ops · 项目助手（平台工程）</span><span class="role-meta">haiku · 唯一 git commit 角色</span></div>
+    <p><strong>职责</strong>：部署/迁移/构建执行、git 归档（唯一执行 commit）、配置同步。<strong>强化</strong>：平台工程（IDP/黄金路径/CI-CD，调用 platform-engineering）+ ITSM（事件/问题/变更/SLA，调用 it-service-management）。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">PM · 项目经理</span><span class="role-meta">sonnet · 纯项目管理</span></div>
+    <p><strong>职责</strong>：变更日志（changelog，最高优先——任何需求先登记）、看板、风险日志、进度播报、闭环跟踪。<strong>纯项目管理</strong>，不含架构职责（已剥离给 SE）。</p>
+  </div>
+
+  <h2>5.2 专项角色（5 个，按需介入）</h2>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">DBA · 数据库工程师</span><span class="role-meta">sonnet · ★ 涉数据层时</span></div>
+    <p><strong>介入</strong>：阶段1.6（BA 前置输入）。<strong>职责</strong>：多存储选型、关系型建模、索引、读写分离/分库分表、迁移幂等。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">Security · 安全工程师</span><span class="role-meta">opus · ★ 须与 Dev 不同模型</span></div>
+    <p><strong>介入</strong>：阶段3.5 与 Reviewer 并行。<strong>职责</strong>：鉴权越权/注入/敏感信息/依赖漏洞/威胁建模（STRIDE）。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">Performance · 性能工程师</span><span class="role-meta">sonnet · ★ 高并发路径时</span></div>
+    <p><strong>介入</strong>：阶段4 与 QA 接力。<strong>职责</strong>：压测方案、性能基线、N+1/无索引/连接池/锁诊断、调优建议。</p>
+  </div>
+
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>05 · L1 角色（2/3）</span></div>
+</div>
+
+<div class="page">
+  <h2 style="margin-top:0;">5.2 专项角色（续）</h2>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">SRE · 可靠性工程师</span><span class="role-meta">sonnet · ★ 上线前/高可用时</span></div>
+    <p><strong>介入</strong>：阶段4.5。<strong>职责</strong>：可观测性三支柱（Metrics/Logging/Tracing）、SLI/SLO、容量、熔断限流降级、混沌、事故复盘。</p>
+  </div>
+
+  <div class="role-card l1">
+    <div class="role-head"><span class="role-name">Analyst · 产品分析师</span><span class="role-meta">sonnet · ★ 双阶段</span></div>
+    <p><strong>介入</strong>：开发期定埋点（阶段1.7）+ 交付后数据分析反哺 PO（阶段6）。<strong>强化</strong>：与 Steward 协同做企业级数据价值挖掘。</p>
+    <p><strong>职责</strong>：指标体系（北极星/AARRR/HEART/OSM）、埋点、漏斗/留存/路径、A/B 实验、迭代建议。</p>
+  </div>
+
+  <div class="role-card l2">
+    <div class="role-head"><span class="role-name">MLE · 机器学习工程师（插件）</span><span class="role-meta">sonnet · mlops 插件</span></div>
+    <p><strong>定位</strong>：模型生命周期工程化。涉 AI 产品时激活（按需 install --plugin mlops）。</p>
+    <p><strong>职责</strong>：模型训练/微调工程化、模型评测（Eval）、部署/灰度/回滚、监控（漂移/幻觉/成本）、Prompt/RAG 版本化。</p>
+  </div>
+
+  <h2>5.3 协作流程（standard 档完整流程）</h2>
+  <div class="flow">[需求/bug 输入]
+→ 阶段-1  变更登记   (派 PM)
+→ 阶段0   理解       (编排者亲自做：复述+澄清+定档位+建case)
+→ 阶段1   PRD        (派 PO)
+→ 阶段1.5 交互设计   (派 UX) ← 涉界面时强制
+→ 阶段1.6 数据建模   (派 DBA) ★ ← 涉数据层时
+→ 阶段1.7 度量埋点   (派 Analyst) ★ ← 大型产品时
+→ 阶段1.8 技术方案   (派 SE) ← standard 档强制
+→ 阶段2   任务拆解   (派 BA，读 DBA + SE 产出)
+→ 阶段3   开发       (派 Dev)
+→ 阶段3.5 多重评审   (并行，全过才放行)
+     ├─ 代码评审     (Reviewer 查规范)
+     └─ 安全评审     (Security 查安全) ★
+→ 阶段4   测试       (QA + Performance 接力)
+     ├─ 功能正确性   (QA)
+     └─ 性能基线     (Performance) ★
+→ 阶段4.5 可靠性设计 (派 SRE) ★ ← 上线前强制
+→ 阶段5   文档/部署  (派 Ops)  └ git 归档(全门禁过)
+→ 交付验收
+→ 阶段6   数据闭环   (派 Analyst) ★ ← 反哺 PO 下一轮 PRD</div>
+  <p><strong>fast 档</strong>：小改动（文件≤5/AC≤3/不涉DDL/不跨模块）走轻流程，跳过 UX/独立BA/部分文档。</p>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>05 · L1 角色与流程（3/3）</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">六、流程沉淀与数据治理闭环</h1>
+  <p>企业的核心是<strong>通过运作、经验和业务锻造沉淀体系和能力</strong>。三大沉淀要素：流程、IT 产品、数据。本体系对这三块的承接：</p>
+  <table>
+    <tr><th>沉淀要素</th><th>承接角色/skill</th><th>价值</th></tr>
+    <tr><td><strong>流程</strong></td><td>EA 主导（business-process skill）+ PgM 衍生项目</td><td>标准化流程指导企业作战</td></tr>
+    <tr><td><strong>IT 产品</strong></td><td>L1 全流程交付 + Ops 平台工程</td><td>流程的 IT 落地载体</td></tr>
+    <tr><td><strong>数据</strong></td><td>Steward 主理（data-governance skill）+ Analyst 挖掘</td><td>企业长期价值壁垒</td></tr>
+  </table>
+
+  <h2>6.1 流程沉淀：战略→架构→流程→项目衍生</h2>
+  <div class="band">
+    <p><strong>关键认知纠正</strong>：流程设计不是"架构之后"单独一步，而是<strong>架构之内</strong>——它是企业架构的业务架构层（TOGAF）。流程设计天然归 EA。</p>
+  </div>
+  <p>EA 调用 <code>business-process</code> skill 设计流程架构（L1价值流→L2流程→L3子流程→L4活动，对标 APQC，BPMN 2.0 建模），沉淀到流程资产库。然后做<strong>流程→IT 映射 gap 分析</strong>——哪些流程缺 IT 支撑/需优化 → 这些 gap 成为 PgM 拆变革项目的输入。<strong>变革项目不需要单独机制</strong>，从流程 gap 自然衍生，PgM 承接。</p>
+
+  <h2>6.2 变革管理：补"人的层面"</h2>
+  <p>变革项目 70% 失败率，主因"只管系统不管人"。<code>change-management</code> skill 补变革的"人的层面"——Prosci ADKAR + Kotter 八步法 + 利益相关者分析 + 沟通/培训/阻力化解。EA/PgM 调用，<strong>不新增角色</strong>。</p>
+
+  <h2>6.3 数据治理：企业长期价值壁垒（Steward 主理）</h2>
+  <p>数据是企业最终转化物，能体现多少价值代表体系成败。当前体系原本 DBA/Analyst/EA 都覆盖不了企业级数据治理——<strong>这是真空白</strong>。数据治理失败的头号原因是"无主理人"，分散必落空。</p>
+  <table>
+    <tr><th>DAMA 治理域</th><th>Steward 职责</th></tr>
+    <tr><td>数据标准化</td><td>主数据标准、数据元标准、口径字典（跨系统统一）</td></tr>
+    <tr><td>数据质量</td><td>完整性/准确性/一致性/及时性，规则与监控</td></tr>
+    <tr><td>元数据管理</td><td>数据字典、数据血缘、影响分析</td></tr>
+    <tr><td>主数据管理</td><td>核心实体单一真相源，跨系统分发同步</td></tr>
+    <tr><td>数据资产化</td><td>数据目录、数据产品、数据服务化</td></tr>
+    <tr><td>数据价值挖掘</td><td>与 Analyst 协同，跨产品业务洞察</td></tr>
+    <tr><td>数据合规</td><td>隐私/留存/GDPR，与 compliance-audit 协同</td></tr>
+  </table>
+  <div class="callout">
+    <div class="callout-title">价值闭环</div>
+    <p>治理（标准化/质量）→ 资产化（可检索可复用）→ 价值挖掘（数据驱动业务）→ 反哺治理（发现质量问题回流）。数据从"负债"变"资产"再变"竞争力"。</p>
+  </div>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>06 · 流程与数据治理</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">七、商用治理体系（五道坎 + 四元能力）</h1>
+  <div class="band">
+    <p><strong>核心认知</strong>：商用卡住的地方几乎都不在功能层。可靠性、安全、成本、可观测、集成——这五道坎和四个元能力，是体系从"概念车"变"可量产的车"的关键。全部已落地为体系治理类 skill（meta 层，默认启用）。</p>
+  </div>
+
+  <h2>7.1 五道商用坎（对应 skill）</h2>
+
+  <h3>坎 1：AI 可靠性治理 → reliability-governance（商用门槛）</h3>
+  <p>从点状防虚报升级为<strong>体系级四道防线</strong>：</p>
+  <table>
+    <tr><th style="width:30%">防线</th><th>内容</th></tr>
+    <tr><td>① 不可逆操作人工锁</td><td>生产部署/DDL/数据删除/配置变更/主分支push/下线/模型上线——7 类操作一律用户确认才执行</td></tr>
+    <tr><td>② 输出兜底校验</td><td>关键产出独立校验（产出者不自证、校验者不抄作业、编排者兜底抽查）</td></tr>
+    <tr><td>③ 全链路可回滚</td><td>部署前必产出回滚方案，无方案不部署；迁移必配套回滚</td></tr>
+    <tr><td>④ 置信度评估</td><td>低置信打回或上报，不自作主张放行；宁可慢不可假</td></tr>
+  </table>
+
+  <h3>坎 2：安全合规 → compliance-audit + Security</h3>
+  <p>等保/GDPR/行业合规检查与审计追溯链。Security 查产品代码安全，compliance-audit 查合规审计链。</p>
+
+  <h3>坎 3：成本治理 → cost-governance（商用可持续）</h3>
+  <table>
+    <tr><th>手段</th><th>内容</th></tr>
+    <tr><td>token 预算与计费</td><td>每 case 设上限，80% 预警，100% 停止派生。各角色消耗可计量</td></tr>
+    <tr><td>模型动态降级</td><td>简单任务降 mechanical，<strong>reasoning 档不降</strong>（降了门禁失效）</td></tr>
+    <tr><td>上下文裁剪</td><td>按角色职责裁剪到"本次必需"最小集，不无脑全量注入</td></tr>
+  </table>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>07 · 商用治理（1/3）</span></div>
+</div>
+
+<div class="page">
+  <h2 style="margin-top:0;">7.1 五道商用坎（续）</h2>
+
+  <h3>坎 4：体系自身可观测性 → system-observability（长期运营）</h3>
+  <p>SRE 监控产品系统，本 skill 监控<strong>体系自身健康</strong>：</p>
+  <table>
+    <tr><th>维度</th><th>指标</th><th>异常信号</th></tr>
+    <tr><td>case 成功率</td><td>一次通过率</td><td>走低说明流程有问题</td></tr>
+    <tr><td>角色产出质量</td><td>各角色打回率</td><td>突增→定义可能有问题</td></tr>
+    <tr><td>门禁有效性</td><td>Reviewer/Security 漏判率</td><td>漏判→门禁清单要补</td></tr>
+    <tr><td>经验库健康</td><td>去重率/复用率</td><td>污染→清洗</td></tr>
+    <tr><td>token 消耗</td><td>各角色分布</td><td>飙升→上下文注入有问题</td></tr>
+  </table>
+  <p>数据反哺方法论标准负责人做<strong>体系自身迭代</strong>——像产品发版一样优化体系。</p>
+
+  <h3>坎 5：落地集成 → data-contract（适配企业工具链）</h3>
+  <p>企业已有 Jira/Confluence/GitLab，不可能换工具。解法：<strong>数据契约标准化</strong>——产出用业界标准格式，换工具是导出导入，不是重写。</p>
+  <table>
+    <tr><th>数据类</th><th>契约格式</th><th>迁移代价</th></tr>
+    <tr><td>文档型（PRD/设计/标准）</td><td>Markdown + YAML frontmatter</td><td>低（任何 Wiki 导入）</td></tr>
+    <tr><td>项目群管理（里程碑/任务）</td><td>JSON Schema + REST API</td><td>中（Jira/Plane 支持）</td></tr>
+    <tr><td>接口契约</td><td>OpenAPI 3.0</td><td>低（Stoplight/Swagger 全支持）</td></tr>
+    <tr><td>度量数据</td><td>Prometheus + OpenTelemetry</td><td>中（Grafana/Datadog 吃这套）</td></tr>
+  </table>
+  <div class="callout">
+    <div class="callout-title">开源起步 → 商业升级路径</div>
+    <p>阶段0：全 git markdown（当前，产出已符合契约）→ 阶段1：Gitea+Outline+Plane+Stoplight+Grafana（开源起步）→ 阶段2/3：按需换 Jira/Confluence（数据导出导入，契约不变）。</p>
+  </div>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>07 · 商用治理（2/3）</span></div>
+</div>
+
+<div class="page">
+  <h2 style="margin-top:0;">7.2 四个元能力（适配未来，保持领先）</h2>
+  <p><strong>领先性不是"现在功能最多"，是"进化最快"</strong>。没人能预测 2027 的范式，但可建立让体系快速吸收新范式的能力。</p>
+  <table>
+    <tr><th>元能力</th><th>对应 skill</th><th>怎么保持领先</th></tr>
+    <tr><td><strong>① 模型无关性</strong></td><td>model-registry</td><td>角色写能力档位（reasoning/structured/mechanical），路由表映射模型。换代只改路由表，不改 22 角色</td></tr>
+    <tr><td><strong>② 框架无关性</strong></td><td>方法论层（已具备）</td><td>编排者方法论是 markdown prompt，不绑 Agent 框架。换 LangGraph/CrewAI 不影响方法论</td></tr>
+    <tr><td><strong>③ 协议标准化</strong></td><td>mcp-integration</td><td>用 MCP 标准对接工具，未来任何支持 MCP 的工具即插即用</td></tr>
+    <tr><td><strong>④ 进化机制</strong></td><td>capability-registry + 三问闸门</td><td>新能力能有序接入而不膨胀；未通过三问拒绝注册</td></tr>
+  </table>
+
+  <h2>7.3 体系治理 skill 全景（meta 层，11 个）</h2>
+  <p>这 11 个不是业务能力，是<strong>体系自身可靠运转的治理机制</strong>，默认启用：</p>
+  <table>
+    <tr><th>skill</th><th>作用</th><th>解决</th></tr>
+    <tr><td>capability-registry</td><td>能力注册表 + 三问闸门</td><td>防膨胀</td></tr>
+    <tr><td>model-registry</td><td>模型路由表（档位→模型）</td><td>防过时</td></tr>
+    <tr><td>reliability-governance</td><td>四道防线</td><td>商用门槛</td></tr>
+    <tr><td>cost-governance</td><td>token 预算 + 降级 + 裁剪</td><td>商用可持续</td></tr>
+    <tr><td>data-contract</td><td>标准化契约</td><td>落地集成</td></tr>
+    <tr><td>system-observability</td><td>体系健康监控</td><td>长期运营</td></tr>
+    <tr><td>mcp-integration</td><td>MCP 标准对接</td><td>适配未来</td></tr>
+    <tr><td>business-process</td><td>BPM 流程架构</td><td>流程沉淀</td></tr>
+    <tr><td>change-management</td><td>OCM 变革管理</td><td>人的层面</td></tr>
+    <tr><td>knowledge-management</td><td>组织级知识库</td><td>知识资产</td></tr>
+    <tr><td>dependency-impact</td><td>全局依赖影响</td><td>跨项目协调</td></tr>
+  </table>
+  <div class="band">
+    <p><strong>诚实边界</strong>：治理 skill 定义的是<strong>规则与协议</strong>（方法论层）。让 AI 出错从"不可控"变"可控可回滚可审计"，但不等于零风险——AI 可靠性是概率性的，最终生产把关责任在人。运行时真实计量/采集/代码对接依赖框架照规范实现。</p>
+  </div>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>07 · 商用治理（3/3）</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">八、能力插件机制与防膨胀</h1>
+  <p>角色和 skills 无限制膨胀是体系最大的慢性病。本章的<strong>插件机制</strong>是根本解法：让体系可自演进，但不膨胀。</p>
+
+  <h2>8.1 三类能力分级（防膨胀第一道闸）</h2>
+  <table>
+    <tr><th>类型</th><th>含义</th><th>安装</th><th>可禁用</th></tr>
+    <tr><td><strong>core</strong></td><td>软件工程刚需的核心能力</td><td>默认装</td><td>❌</td></tr>
+    <tr><td><strong>layer</strong></td><td>三层架构的 L2/L3 层级能力</td><td>默认装</td><td>✅ 纯 L1 可禁</td></tr>
+    <tr><td><strong>plugin</strong></td><td>可选领域插件（MLOps 等）</td><td><strong>按需装</strong></td><td>✅ 默认就不装</td></tr>
+  </table>
+
+  <h2>8.2 三问闸门（防膨胀硬约束）</h2>
+  <div class="callout">
+    <div class="callout-title">三问闸门</div>
+    <p><strong>1. 解决什么缺口？</strong>——现有角色/skill 覆盖不了什么？若现有能覆盖 → 拒绝注册。</p>
+    <p><strong>2. 与现有角色的边界在哪？</strong>——职责如何划分，不串味？边界不清 → 拒绝注册。</p>
+    <p><strong>3. 什么条件下才激活？</strong>——trigger_when 必须明确，不是每次都派。无明确触发 → 拒绝注册。</p>
+  </div>
+
+  <h2>8.3 当前已注册插件</h2>
+  <table>
+    <tr><th>插件</th><th>角色</th><th>trigger_when</th><th>安装</th></tr>
+    <tr><td><strong>mlops</strong></td><td>team-mle</td><td>涉模型训练/微调、RAG、Prompt 工程规模化、LLM Agent 平台</td><td><code>install --plugin mlops</code></td></tr>
+  </table>
+  <p>其他领域（FinOps/平台工程/数据契约/需求工程等）已作为<strong>横向 skill</strong>纳入默认能力（不占 plugin 名额）。新领域按三问流程注册。</p>
+
+  <h2>8.4 注册新插件流程</h2>
+  <ol>
+    <li>编排者遇注册表未覆盖的领域 → <strong>不擅自造角色</strong></li>
+    <li>上报方法论标准负责人走三问评估</li>
+    <li>三问通过 → 注册 capability-registry + 建角色/skill + install PluginMap 登记</li>
+    <li>三问不过 → 复用现有能力</li>
+    <li>用户按需 <code>--plugin &lt;名&gt;</code> 安装</li>
+  </ol>
+  <div class="band">
+    <p><strong>这条机制让体系从"每次追新都要大改"变成"注册一个插件即可接入"——可演进、可扩展、但不膨胀。</strong></p>
+  </div>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>08 · 插件机制</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">九、从 0 到 1 落地：六步实施法</h1>
+
+  <h2>第 1 步：规划角色与模型分工</h2>
+  <p>先定花名册。起步可只配核心 9 角色（PO/UX/SE/BA/Dev/Reviewer/QA/Ops/PM），跑通后加专项（DBA/Security/Performance/SRE/Analyst），企业级再加 L2/L3。</p>
+  <table>
+    <tr><th>档位</th><th>典型角色</th><th>模型</th></tr>
+    <tr><td>reasoning</td><td>PO/UX/SE/Reviewer/Security/EA/PgM/Strategy/GRC</td><td>opus（高端）</td></tr>
+    <tr><td>structured</td><td>BA/DBA/QA/Performance/SRE/Analyst/Steward/Standards/VSM/MLE</td><td>sonnet（中端）</td></tr>
+    <tr><td>mechanical</td><td>Ops</td><td>haiku（低端）</td></tr>
+  </table>
+  <p><strong>模型隔离硬约束</strong>：Reviewer 和 Security 必须与 Dev 不同模型。</p>
+
+  <h2>第 2 步：创建工程内配置目录</h2>
+  <div class="code-block">你的工程/
+└── agents-config/
+    ├── README.md / install.sh / install.ps1
+    ├── agents/         22 个 team-*.md
+    ├── commands/       斜杠命令（/团队开发 /项目群协同 /企业架构 /战略投资）
+    └── skills/         26 个 skills（含编排者方法论）</div>
+
+  <h2>第 3 步：编写角色子智能体定义</h2>
+  <p>每个角色 .md = front matter（YAML）+ 角色 Prompt。每个 Prompt 必须写清：<strong>"不做"边界</strong>（防串味）、"只做"职责、磁盘事实核对段（评审/测试类）、项目约定占位（CLAUDE.md 注入）、本次经验沉淀段。</p>
+
+  <h2>第 4 步：编写编排者方法论（核心）</h2>
+  <p>含：触发约定、商用治理（路由表+可靠性四道防线）、核心职责、协作流程、专项角色触发规则、多重门禁、自治上报、模型隔离、产物落盘、经验记忆闭环。</p>
+
+  <h2>第 5 步：编写一键安装脚本</h2>
+  <p>默认装 core+layer，plugin 按需 <code>--plugin</code>。Windows 的 install.ps1 须 <strong>UTF-8 with BOM</strong>（防中文 PS5 崩溃）。</p>
+
+  <h2>第 6 步：验证与首次使用</h2>
+  <ol>
+    <li>跑安装脚本 → 重启 IDE → 设置→子智能体看 22 个 team-* → <code>/团队开发 测试一下</code> 验证编排者</li>
+    <li>项目根放 CLAUDE.md（技术栈/规范/性能/安全/度量基线），编排者运行时注入</li>
+  </ol>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>09 · 落地实施</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">十、踩坑实录与反模式</h1>
+  <table>
+    <tr><th style="width:18%">坑</th><th style="width:35%">现象</th><th>解法</th></tr>
+    <tr><td><strong>编排者越权</strong></td><td>自己直接跑部署，不派 Ops</td><td>方法论硬写"不越权执行"清单</td></tr>
+    <tr><td><strong>自审自</strong></td><td>Dev 和 Reviewer 同模型，评审形同虚设</td><td>强制模型隔离，派生时校验；Security 同理</td></tr>
+    <tr><td><strong>经验不注入</strong></td><td>子智能体反复踩相同坑</td><td>hook 不作用于子智能体，编排者必须手动注入</td></tr>
+    <tr><td><strong>子智能体互相调用</strong></td><td>调用栈爆炸、上下文污染</td><td>子智能体只由主 Agent 调度，禁止横向</td></tr>
+    <tr><td><strong>技能不被调用</strong></td><td>子智能体"不知道"有技能</td><td>技能由主 Agent 加载并注入 prompt</td></tr>
+    <tr><td><strong>写提交不分</strong></td><td>Dev 写完自己 commit，评审失效</td><td>git commit 唯一由 Ops 执行</td></tr>
+    <tr><td><strong>编排者兼架构</strong></td><td>编排者既调度又做技术方案，两头不深</td><td>架构职责剥离给 SE，编排者纯流程</td></tr>
+  </table>
+
+  <h2>10.2 虚报类故障（最高危）</h2>
+  <div class="warn">
+    <p><strong>Dev 虚报改动，Reviewer/QA 基于报告做纸面通过，假修复被部署——最危险故障。</strong></p>
+    <p>根因：评审/测试角色采信了 Dev 报告文字，没独立核对磁盘事实。报告可幻觉，git diff 不会。</p>
+    <p>解法（贯穿四层）：Dev 回报告前 git diff 自证 → Reviewer/QA 第一步磁盘事实核对 → 编排者派 Ops 部署前抽查 → 任一层发现虚报立即停止、记入风险日志。</p>
+  </div>
+
+  <h2>10.3 配置类故障</h2>
+  <div class="callout">
+    <div class="callout-title">子智能体消失 / 技能重复 / install.ps1 崩溃 / model 冲突</div>
+    <p><strong>子智能体消失/重复</strong>：IDE 同时加载工程级和用户级同名定义 → 删工程级 .zcode/agents|skills，只放 runtime/。</p>
+    <p><strong>install.ps1 崩溃</strong>：UTF-8 无 BOM 在中文 PS5 按 GBK 解析崩溃 → 保存为 UTF-8 with BOM。</p>
+    <p><strong>model 冲突</strong>：用户界面手选后回写 custom:uuid:name 格式是正常的，不要手改回内置别名。</p>
+  </div>
+
+  <h2>10.4 排查"看不到/重复"标准流程</h2>
+  <ol>
+    <li>查用户级 <code>~/.zcode/</code> 数量齐全</li>
+    <li>查工程级 <code>.zcode/</code> 有无 agents/skills（有就删，只留 runtime）</li>
+    <li>查 model ID 有效</li>
+    <li>重启 IDE</li>
+  </ol>
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>10 · 踩坑实录</span></div>
+</div>
+
+<div class="page">
+  <h1 class="section">十一、适用性、IDE 迁移与小结</h1>
+
+  <h2>11.1 按项目类型裁剪</h2>
+  <table>
+    <tr><th>项目类型</th><th>推荐配置</th></tr>
+    <tr><td>内部工具/脚本</td><td>核心 5（PO/Dev/Reviewer/QA/Ops）</td></tr>
+    <tr><td>标准业务系统</td><td>核心 9（+UX/SE/BA/PM）</td></tr>
+    <tr><td>多存储/数据密集</td><td>核心 + DBA + Steward</td></tr>
+    <tr><td>高并发系统</td><td>核心 + DBA + Performance + SRE</td></tr>
+    <tr><td>对外服务/含支付</td><td>核心 + Security</td></tr>
+    <tr><td>大型 C 端产品</td><td>核心 + 全部专项 + Analyst</td></tr>
+    <tr><td>企业级变革项目</td><td>三层全开（L1+L2+L3+GRC）</td></tr>
+    <tr><td>AI 产品</td><td>+ mlops 插件（team-mle）</td></tr>
+  </table>
+
+  <h2>11.2 IDE 迁移</h2>
+  <p>方法论与 IDE 解耦，迁移只替换：① 配置目录路径 ② 安装脚本目标路径 ③ 派生 API 调用形式。<strong>编排者方法论、角色 Prompt、阶段流程、检查点规则、经验记忆机制、商用治理——这些是 IDE 无关的，可直接复用。</strong></p>
+
+  <h2>11.3 价值总结</h2>
+  <table>
+    <tr><th style="width:20%">维度</th><th>价值</th></tr>
+    <tr><td><strong>分工</strong></td><td>每个 AI 只干擅长的事，Prompt 短而精</td></tr>
+    <tr><td><strong>门禁</strong></td><td>强制检查点 + 模型隔离 + 磁盘核对，质量不靠自觉</td></tr>
+    <tr><td><strong>可审计</strong></td><td>产物落盘、case 目录、经验沉淀，全程留痕</td></tr>
+    <tr><td><strong>可复用</strong></td><td>配置随 Git 走，新人 clone 一键就绪</td></tr>
+    <tr><td><strong>可迁移</strong></td><td>方法论与 IDE 解耦，换工具不换思路</td></tr>
+    <tr><td><strong>专业纵深</strong></td><td>专项角色覆盖数据/安全/性能/可靠性/度量/治理</td></tr>
+    <tr><td><strong>企业闭环</strong></td><td>战略→架构→流程→数据→治理，端到端持续经营</td></tr>
+    <tr><td><strong>防膨胀</strong></td><td>插件机制 + 三问闸门，可演进但不失控</td></tr>
+  </table>
+
+  <div class="band">
+    <p><strong>一句话</strong>：这套体系让企业级软件工程从"人盯人、开会协调"变成"数据驱动、机制保证"——架构原则自动传导，进度自动上报，依赖主动协调，冲突有明确路径，治理有闭环兜底。从战略到战术、从建设到治理、从当下到未来，每个层级各司其职，靠共享文档树和里程碑协议拉通。</p>
+    <p style="margin-top:2mm">本方案基于真实项目实践沉淀 + 业界标准（TOGAF/COBIT/COSO/ITIL/DAMA/APQC/BPMN/ADKAR/DORA），配置源码与脚本均可直接复用。</p>
+  </div>
+
+  <div class="footer"><span>企业级多 Agent 协同运作指导手册</span><span>11 · 迁移与小结</span></div>
+</div>
+
+</body>
+</html>

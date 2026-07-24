@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.eaiselp</groupId>
+        <artifactId>eaiselp-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>eaiselp-runtime</artifactId>
+    <dependencies>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+        <dependency><groupId>com.alibaba.cloud</groupId><artifactId>spring-cloud-starter-alibaba-nacos-discovery</artifactId></dependency>
+        <dependency><groupId>org.springframework.cloud</groupId><artifactId>spring-cloud-starter-openfeign</artifactId></dependency>
+        <dependency><groupId>io.github.openfeign</groupId><artifactId>feign-okhttp</artifactId></dependency>
+        <dependency><groupId>org.springframework.statemachine</groupId><artifactId>spring-statemachine-core</artifactId></dependency>
+        <dependency><groupId>dev.langchain4j</groupId><artifactId>langchain4j</artifactId></dependency>
+        <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-common</artifactId></dependency>
+        <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-capability</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-adapter</artifactId><version>${project.version}</version></dependency>
+        <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-data</artifactId><version>${project.version}</version></dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build><finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <!-- version / configuration 从父 POM pluginManagement 继承（ES-001 §2.3）-->
+                <executions>
+                    <execution>
+                        <id>repackage</id>
+                        <goals><goal>repackage</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- JDK 26 + Mockito/ByteBuddy 兼容：ByteBuddy 官方支持到 Java 22，
+                         JDK 26 需开启 experimental 模式才能生成 mock 字节码（否则 @MockBean 全失败）。
+                         本机测试环境固定 JDK 26，故在此显式声明 argLine，避免 QA 跑 mvn test 时漏带 -D 参数。 -->
+                    <argLine>-Dnet.bytebuddy.experimental=true</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

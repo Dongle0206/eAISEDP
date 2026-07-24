@@ -1,0 +1,27 @@
+server:
+  port: 8084
+spring:
+  application:
+    name: eaiselp-adapter
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+eaiselp:
+  adapter:
+    git:
+      provider: ${ADAPTER_GIT:default}
+      base-path: ${GIT_BASE_PATH:./data/repos}
+    llm:
+      # M2 SP-6 多 provider 路由（P8 解耦层）：档位→具体模型映射由 t_model_routing 表权威，
+      # yml 只保留各 provider 的连接凭据/base-url。GlmLlmAdapter 已是无条件装配（不再读 provider）。
+      glm:
+        api-key: ${GLM_API_KEY:}
+        base-url: ${GLM_BASE_URL:https://open.bigmodel.cn/api/paas/v4}
+      deepseek:                                              # 预留（OpenAI 兼容），配 Key + enabled=true 启用
+        enabled: ${DEEPSEEK_ENABLED:false}
+        api-key: ${DEEPSEEK_API_KEY:}
+        base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+    docstore:
+      provider: ${ADAPTER_DOCSTORE:default}
+      base-path: ${DOCSTORE_BASE_PATH:./data/docs}

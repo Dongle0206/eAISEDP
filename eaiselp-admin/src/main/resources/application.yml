@@ -1,0 +1,9 @@
+server:
+  port: 8087
+spring:
+  application:
+    name: eaiselp-admin
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}

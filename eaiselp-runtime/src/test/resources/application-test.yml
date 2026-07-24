@@ -1,0 +1,36 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:eaiselp;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-h2.sql
+  # 关闭 nacos 注册（测试无 nacos 实例，避免启动卡住或失败）
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+        register-enabled: false
+    discovery:
+      enabled: false
+  # 关闭 CapabilityLoader 的 @Scheduled 热重载（避免测试期间触发文件扫描）
+  autoconfigure:
+    exclude:
+      - org.springframework.cloud.alibaba.nacos.discovery.NacosDiscoveryAutoConfiguration
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+eaiselp:
+  tenant:
+    mode: shared
+  system:
+    path: ./nonexistent-agents-config-test   # 测试不依赖体系文件加载
+    auto-refresh: false

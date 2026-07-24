@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.eaiselp</groupId>
+        <artifactId>eaiselp-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>eaiselp-common</artifactId>
+    <name>eAISEDP Common</name>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.github.jsqlparser</groupId>
+            <artifactId>jsqlparser</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.servlet</groupId>
+            <artifactId>jakarta.servlet-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- M2-DFX 限流（SE 技术方案 §4.2.1）：bucket4j_jdk11-core 纯 Java、无外部依赖、JDK11+。
+             common 是 library，scope 默认 compile，被 auth/runtime 等 host 模块传递可用。
+             M2 用内存桶，M3 可换 bucket4j-redis 做集群限流（SE §12 演进）。
+             注：SE 方案原文写 bucket4j-jdk11-core:8.10.1，但 8.10.1 在 Maven Central 不存在
+             （8.10.x 用旧坐标桶名），实际可用坐标为 bucket4j_jdk11-core（下划线），最低 8.11.0。
+             Dev 核对后采用 8.11.0（最接近 SE 意图的可用版本，API 兼容）。 -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j_jdk11-core</artifactId>
+            <version>8.11.0</version>
+        </dependency>
+        <!-- M2 Phase 1：JwtAuthInterceptor/PermissionInterceptor 编译期需 ObjectMapper 写 401/403 JSON 响应。
+             common 是 library，starter-web 为 provided 且其传递的 jackson-databind 在本模块编译期不可见，故显式声明（版本由 Spring Boot BOM 管理）。 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <!-- M2 Phase 1 新增：JWT（HS256）—— JwtUtil 在 common，被 auth/runtime/gateway 共用 -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -1,0 +1,128 @@
+# =====================================================================
+# eAISEDP 生产环境 Docker Compose
+# 部署机使用（16GB 内存）
+#
+# 与开发版的区别：
+#   1. 所有数据卷指向 D:\eaiselp\data（不占 C 盘）
+#   2. 资源限制明确（避免吃满 16GB）
+#   3. 加日志大小限制（防止日志爆盘）
+#   4. 加健康检查（监控用）
+#   5. 加 restart 策略（异常退出自动拉起）
+#
+# 启动：
+#   cd D:\eaiselp\platform
+#   docker compose -f docker-compose.prod.yml up -d
+# =====================================================================
+
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: eaiselp-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: eaiselp
+      TZ: Asia/Shanghai
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+      --max-connections=200
+      --innodb-buffer-pool-size=512M
+      --slow-query-log=ON
+      --long-query-time=2
+    ports:
+      - "3306:3306"
+    volumes:
+      - D:/eaiselp/data/mysql:/var/lib/mysql
+      - ./eaiselp-data/src/main/resources/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - eaiselp-net
+
+  nacos:
+    image: nacos/nacos-server:v2.3.0-slim
+    container_name: eaiselp-nacos
+    restart: unless-stopped
+    environment:
+      MODE: standalone
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+      TZ: Asia/Shanghai
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    volumes:
+      - D:/eaiselp/data/nacos/logs:/home/nacos/logs
+      - D:/eaiselp/data/nacos/data:/home/nacos/data
+    deploy:
+      resources:
+        limits:
+          memory: 700M
+          cpus: '0.5'
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848/nacos/v1/console/health/readiness"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - eaiselp-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: eaiselp-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-eaiselp}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-eaiselp123}
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - D:/eaiselp/data/minio:/data
+    deploy:
+      resources:
+        limits:
+          memory: 500M
+          cpus: '0.5'
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - eaiselp-net
+
+networks:
+  eaiselp-net:
+    driver: bridge
+    name: eaiselp-net

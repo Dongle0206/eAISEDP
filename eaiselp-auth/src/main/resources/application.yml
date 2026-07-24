@@ -1,0 +1,29 @@
+server:
+  port: 8085
+spring:
+  application:
+    name: eaiselp-auth
+  datasource:                                                   # M2 Phase 1 新增：auth 独立查 t_user/t_user_role
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/eaiselp?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+eaiselp:
+  security:                                                     # M2 Phase 1 新增：JWT 配置
+    jwt:
+      secret: ${JWT_SECRET:dev-placeholder-secret-must-be-at-least-32-bytes-long-for-hs256-algorithm}
+      expire-seconds: 86400
+      issuer: eaiselp-auth
+    force-https: false                                           # M2 开发期 false，生产 true

@@ -1,0 +1,55 @@
+#!/bin/sh
+# eAISEDP pre-commit secret scan hook
+# Scans staged changes for common secret patterns (API keys, passwords, tokens)
+# Install: git config core.hooksPath .githooks (run once per clone)
+#
+# Patterns covered:
+# - GLM/Zhipu API key (32 hex chars + . + random)
+# - Generic API key assignments
+# - AWS-style keys
+# - Private keys
+
+STATUS=0
+
+# Get staged diff (added lines only)
+DIFF=$(git diff --cached --diff-filter=ACM --no-color | grep "^+" | grep -v "^+++" || true)
+
+# Patterns (return 0 = leak found = block commit)
+check_pattern() {
+    local name="$1"
+    local pattern="$2"
+    if echo "$DIFF" | grep -qE "$pattern"; then
+        echo "[$0] BLOCK: $name detected in staged changes:"
+        echo "$DIFF" | grep -nE "$pattern" | head -5
+        echo ""
+        echo "To fix: replace with environment variable or <placeholder>, then re-stage."
+        STATUS=1
+    fi
+}
+
+# GLM/Zhipu specific (32 hex + dot + alphanumeric)
+check_pattern "GLM API Key" "[0-9a-f]{32}\.[A-Za-z0-9]{10,}"
+
+# Generic api_key = "value" (16+ chars, looks like a secret)
+check_pattern "Generic API Key assignment" "(api[_-]?key|apikey|secret|token|password)[\"'"'"']?\s*[:=]\s*["'"'"'][0-9a-fA-F]{16,}["'"'"']"
+
+# AWS access key
+check_pattern "AWS Access Key" "AKIA[0-9A-Z]{16}"
+
+# Private key header
+check_pattern "Private Key" "BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY"
+
+# Common Chinese cloud provider keys (Aliyun, Tencent)
+check_pattern "Cloud Provider Key" "(LTAI[a-zA-Z0-9]{12,}|AKID[a-zA-Z0-9]{20,})"
+
+if [ $STATUS -ne 0 ]; then
+    echo "==========================================================="
+    echo "  COMMIT BLOCKED: secrets detected in staged changes"
+    echo "  Review the patterns above and remove sensitive data."
+    echo "  Use environment variables or placeholders instead."
+    echo "  If this is a false positive, use: git commit --no-verify"
+    echo "==========================================================="
+    exit 1
+fi
+
+exit 0

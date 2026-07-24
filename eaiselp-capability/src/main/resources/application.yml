@@ -1,0 +1,13 @@
+server:
+  port: 8082
+spring:
+  application:
+    name: eaiselp-capability
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+eaiselp:
+  system:
+    path: ${SYSTEM_PATH:../agents-config}
+    auto-refresh: true

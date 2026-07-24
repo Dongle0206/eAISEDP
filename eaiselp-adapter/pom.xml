@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.eaiselp</groupId>
+        <artifactId>eaiselp-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>eaiselp-adapter</artifactId>
+    <dependencies>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+        <!-- M2 SP-6 新增：ModelRouting 实体/Mapper 持久化（读 t_model_routing 路由表），
+             与 data 模块共用同一 MySQL 会话（runtime 装配时由 eaiselp-data 的 MybatisPlusConfig + datasource 提供）。
+             version 由父 POM dependencyManagement 管（ES-001 §2.2）。ModelRoutingService 放 adapter 内部，避免 adapter→data 反向依赖（ES-003 §9.2 / P3）。 -->
+        <dependency><groupId>com.baomidou</groupId><artifactId>mybatis-plus-spring-boot3-starter</artifactId></dependency>
+        <dependency><groupId>dev.langchain4j</groupId><artifactId>langchain4j</artifactId></dependency>
+        <dependency><groupId>org.eclipse.jgit</groupId><artifactId>org.eclipse.jgit</artifactId><version>6.9.0.202403050737-r</version></dependency>
+        <dependency><groupId>io.minio</groupId><artifactId>minio</artifactId><version>8.5.10</version></dependency>
+        <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-common</artifactId></dependency>
+        <dependency>
+            <!-- GLM 接入测试：本地 mock HTTP 服务（case-20260723-GLM接入，SE §3.2，version 由父 POM 管）-->
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>mockwebserver</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <!-- library 模块禁止配 spring-boot-maven-plugin / 依赖 nacos-discovery（同 capability，ADR-001 P2 / ES-001 §2.2 / QG G2+G5）-->
+    <build><finalName>${project.artifactId}</finalName></build>
+</project>

@@ -1,0 +1,14 @@
+server:
+  port: 8086
+spring:
+  application:
+    name: eaiselp-observability
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

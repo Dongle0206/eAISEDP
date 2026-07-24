@@ -1,0 +1,27 @@
+server:
+  port: 8080
+spring:
+  application:
+    name: eaiselp-gateway
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_HOST:localhost}:${NACOS_PORT:8848}
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+      routes:
+        - id: runtime
+          uri: lb://eaiselp-runtime
+          predicates: [Path=/api/runtime/**]
+        - id: capability
+          uri: lb://eaiselp-capability
+          predicates: [Path=/api/capability/**]
+        - id: data
+          uri: lb://eaiselp-data
+          predicates: [Path=/api/data/**]
+        - id: adapter
+          uri: lb://eaiselp-adapter
+          predicates: [Path=/api/adapter/**]

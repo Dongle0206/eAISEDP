@@ -1,0 +1,252 @@
+# 企业级多 Agent 协同运作体系 · 架构图（Mermaid 源码）
+
+> 使用：复制 mermaid 代码块粘到 https://mermaid.live 即时渲染；或 VSCode 装 Mermaid 插件预览本文件。
+
+---
+
+## 图 1：三层架构总览（主图）
+
+```mermaid
+flowchart TB
+    classDef l3 fill:#faf5ff,stroke:#6b46c1,stroke-width:2px,color:#4c1d95
+    classDef l2 fill:#fffaf0,stroke:#c05621,stroke-width:2px,color:#7c2d12
+    classDef l1 fill:#ebf8ff,stroke:#2c5282,stroke-width:2px,color:#1e3a5f
+    classDef meta fill:#f0fff4,stroke:#276749,stroke-width:1.5px,color:#1a4d2e,stroke-dasharray:5 3
+    classDef plugin fill:#fef2f2,stroke:#991b1b,stroke-width:1.5px,color:#7f1d1d,stroke-dasharray:5 3
+
+    subgraph L3["L3 战略层 — 定方向/架构/治理监督"]
+        direction LR
+        EA["EA 企业架构师<br/>架构蓝图·流程架构·ADR"]:::l3
+        ST["Strategy 战略分析师<br/>ROI·技术雷达·优先级"]:::l3
+        GRC["GRC 治理/风险/合规<br/>审计·风险·合规·控制"]:::l3
+    end
+
+    subgraph L2["L2 项目群层 — 多项目协同/标准化/数据治理"]
+        direction LR
+        PGM["PgM 项目群经理<br/>拆项目群·派编排者·里程碑"]:::l2
+        STD["Standards 标准负责人<br/>定义规范·CLAUDE.md·门禁"]:::l2
+        VSM["VSM 价值流分析<br/>DORA·流动效率·瓶颈"]:::l2
+        STE["Steward 数据管家<br/>标准化·质量·主数据·资产化"]:::l2
+    end
+
+    subgraph L1["L1 战术层 — 单 case 全生命周期（14 角色）"]
+        direction TB
+        subgraph core["核心角色（9，全程）"]
+            direction LR
+            PO["PO"]:::l1
+            UX["UX"]:::l1
+            SE["SE 技术主导"]:::l1
+            BA["BA"]:::l1
+            DEV["Dev"]:::l1
+            REV["Reviewer"]:::l1
+            QA["QA"]:::l1
+            OPS["Ops"]:::l1
+            PM["PM"]:::l1
+        end
+        subgraph spec["专项角色（5，按需 ★）"]
+            direction LR
+            DBA["DBA"]:::l1
+            SEC["Security"]:::l1
+            PERF["Performance"]:::l1
+            SRE["SRE"]:::l1
+            ANA["Analyst"]:::l1
+        end
+    end
+
+    subgraph META["体系治理 meta 层（11 skills，默认启用）"]
+        direction LR
+        M1["capability-registry<br/>防膨胀"]:::meta
+        M2["model-registry<br/>防过时"]:::meta
+        M3["reliability-governance<br/>商用门槛"]:::meta
+        M4["cost-governance<br/>可持续"]:::meta
+        M5["data-contract<br/>落地集成"]:::meta
+        M6["system-observability<br/>运营"]:::meta
+        M7["mcp-integration<br/>适配未来"]:::meta
+    end
+
+    subgraph CROSS["横向跨层能力（4 skills）"]
+        direction LR
+        C1["business-process<br/>流程架构"]:::meta
+        C2["change-management<br/>变革管理"]:::meta
+        C3["knowledge-management<br/>知识资产"]:::meta
+        C4["dependency-impact<br/>依赖影响"]:::meta
+    end
+
+    PLUGIN["plugin: mlops · team-mle（按需装）<br/>模型训练/评测/部署/监控"]:::plugin
+
+    L3 -->|"架构原则 + 治理监督"| L2
+    L2 -->|"派发子项目 + 标准 + 数据治理"| L1
+    META -.->|"治理所有层"| L3
+    META -.-> L2
+    META -.-> L1
+    CROSS -.->|"各层调用"| L2
+    PLUGIN -.->|"涉AI产品时"| L1
+    GRC ==>|"治理发现反哺迭代"| L3
+```
+
+---
+
+## 图 2：L1 单 case 全生命周期协作流程
+
+```mermaid
+flowchart TB
+    classDef stage fill:#ebf8ff,stroke:#2c5282,stroke-width:1.5px,color:#1e3a5f
+    classDef gate fill:#fef2f2,stroke:#991b1b,stroke-width:2px,color:#7f1d1d
+    classDef special fill:#fffaf0,stroke:#c05621,stroke-width:1.5px,color:#7c2d12,stroke-dasharray:4 2
+    classDef orch fill:#1e3a5f,stroke:#1e3a5f,color:#fff
+
+    IN(["需求/bug 输入"]):::orch
+    S0["阶段-1 变更登记<br/>派 PM"]:::stage
+    S1["阶段0 理解<br/>编排者亲自做"]:::stage
+    S2["阶段1 PRD<br/>派 PO"]:::stage
+    S3["阶段1.5 交互设计<br/>派 UX"]:::stage
+    S4["阶段1.6 数据建模<br/>派 DBA ★"]:::special
+    S5["阶段1.7 度量埋点<br/>派 Analyst ★"]:::special
+    S6["阶段1.8 技术方案<br/>派 SE"]:::stage
+    S7["阶段2 任务拆解<br/>派 BA"]:::stage
+    S8["阶段3 开发<br/>派 Dev"]:::stage
+
+    subgraph GATE35["阶段3.5 多重评审门禁（并行）"]
+        direction LR
+        R["Reviewer<br/>代码规范门禁"]:::gate
+        SEC["Security ★<br/>安全门禁"]:::gate
+    end
+
+    subgraph GATE4["阶段4 测试（接力）"]
+        direction LR
+        Q["QA<br/>功能正确性"]:::gate
+        P["Performance ★<br/>性能基线"]:::gate
+    end
+
+    S9["阶段4.5 可靠性设计<br/>派 SRE ★"]:::special
+    S10["阶段5 部署/归档<br/>派 Ops"]:::stage
+    OUT(["交付验收"]):::orch
+    S11["阶段6 数据闭环<br/>派 Analyst ★<br/>反哺 PO"]:::special
+
+    IN --> S0 --> S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
+    S8 --> GATE35 --> GATE4 --> S9 --> S10 --> OUT --> S11
+    S11 -.->|"反哺下一轮 PRD"| S2
+```
+
+---
+
+## 图 3：企业级沉淀闭环（建设→治理→迭代）
+
+```mermaid
+flowchart LR
+    classDef elem fill:#fffaf0,stroke:#c05621,stroke-width:2px,color:#7c2d12
+    classDef flow_node fill:#ebf8ff,stroke:#2c5282,stroke-width:1.5px,color:#1e3a5f
+    classDef data fill:#f0fdf4,stroke:#166534,stroke-width:2px,color:#14532d
+    classDef grc fill:#fef2f2,stroke:#991b1b,stroke-width:2px,color:#7f1d1d
+
+    STRAT(["战略输入"]):::flow_node
+
+    subgraph BUILD["建设执行层"]
+        direction TB
+        EA2["EA 企业架构<br/>（含流程架构）"]:::flow_node
+        PROC["流程沉淀<br/>EA 主导 + business-process"]:::elem
+        GAP["流程 gap 分析<br/>衍生变革项目"]:::flow_node
+        IT["IT 产品<br/>L1 全流程交付"]:::elem
+        DATA["数据治理<br/>Steward 主理"]:::data
+    end
+
+    subgraph GOV["治理监督层（GRC）"]
+        direction TB
+        AUDIT["治理审计<br/>流程/标准/控制"]:::grc
+        RISK["风险评估<br/>系统性/合规/数据"]:::grc
+        COMPL["合规治理<br/>SOX/COBIT 内控"]:::grc
+        IMPROVE["持续改进驱动<br/>反哺迭代"]:::grc
+    end
+
+    STRAT --> EA2
+    EA2 --> PROC
+    PROC --> GAP
+    GAP --> IT
+    IT --> DATA
+    DATA -.->|"价值挖掘反哺"| STRAT
+
+    BUILD -.->|"被审视"| GOV
+    GOV -.->|"治理发现<br/>反哺迭代"| BUILD
+```
+
+---
+
+## 图 4：eAISEDP 平台五层架构（IT 承载视角）
+
+```mermaid
+flowchart TB
+    classDef layer fill:#ebf8ff,stroke:#2c5282,stroke-width:2px,color:#1e3a5f
+    classDef infra fill:#f0fff4,stroke:#276749,stroke-width:2px,color:#1a4d2e
+    classDef core fill:#fef2f2,stroke:#991b1b,stroke-width:2px,color:#7f1d1d
+
+    subgraph L5["L5 接入层"]
+        WEB["Web 控制台<br/>jQuery+HTML+Bootstrap"]:::layer
+        IDE["IDE 插件<br/>VSCode/JetBrains"]:::layer
+        API["REST API"]:::layer
+    end
+
+    subgraph L4["L4 编排运行时（核心）"]
+        ENGINE["派生引擎<br/>唯一调度入口·7步动作"]:::core
+        STATE["状态机<br/>Spring Statemachine"]:::core
+        GATE["门禁协调器<br/>并行+接力"]:::core
+        CHECK["检查点<br/>不可逆操作人工锁"]:::core
+        CTX["上下文装配器<br/>CLAUDE.md+经验+裁剪"]:::core
+    end
+
+    subgraph L3["L3 能力层（加载不重写）"]
+        LOAD["体系加载器<br/>从 markdown 加载角色/skill"]:::layer
+        HOT["热更新<br/>30s 检测变更"]:::layer
+    end
+
+    subgraph L2["L2 数据层（data-contract 承载）"]
+        DB["MySQL<br/>case/产物/里程碑/检查点"]:::layer
+        DOC["MinIO<br/>文档型产物"]:::layer
+        TS["Prometheus<br/>度量时序"]:::layer
+    end
+
+    subgraph L1["L1 基础设施（适配器 SPI）"]
+        GIT["GitAdapter<br/>默认:本地 企业:GitLab"]:::infra
+        LLM["LlmAdapter<br/>默认:GLM 企业:OpenAI"]:::infra
+        DOCS["DocStoreAdapter<br/>默认:MinIO 企业:Confluence"]:::infra
+        SPI["配置驱动切换<br/>企业接入零代码侵入"]:::infra
+    end
+
+    SYS[("eAISEDP-system<br/>体系配置仓库<br/>21角色+25skills")]:::layer
+
+    L5 --> L4
+    L4 --> L3
+    L4 --> L2
+    L4 --> L1
+    L3 -.->|"加载"| SYS
+```
+
+---
+
+## 角色速查表（22 角色）
+
+| 层 | 角色 | 模型 | 职责一句话 |
+|---|---|---|---|
+| **L3** | team-ea | opus | 企业架构蓝图 + 流程架构主导 |
+| L3 | team-strategy | opus | 可行性/ROI/技术雷达 |
+| L3 | team-grc | opus | 治理审计/风险/合规/控制有效性 |
+| **L2** | team-pgm | opus | 项目群拆解/多编排者协调 |
+| L2 | team-standards | sonnet | 唯一"定义规范"角色 |
+| L2 | team-vsm | sonnet | DORA + 流动效率度量 |
+| L2 | team-steward | sonnet | 企业数据资产主理 |
+| **L1 核心** | team-po | opus | PRD + 产品管理 + 需求工程 |
+| L1 核心 | team-ux | opus | 交互设计 |
+| L1 核心 | team-se | opus | 技术方案/质量主导/攻坚 |
+| L1 核心 | team-ba | sonnet | 任务拆解/接口契约 |
+| L1 核心 | team-dev | sonnet | 写代码（不提交 git）|
+| L1 核心 | team-reviewer | opus | 代码规范门禁 |
+| L1 核心 | team-qa | sonnet | 功能测试 |
+| L1 核心 | team-ops | haiku | 部署/git 归档/平台工程 |
+| L1 核心 | team-pm | sonnet | 项目管理（纯流程）|
+| **L1 专项** | team-dba | sonnet | 数据建模/存储选型 ★ |
+| L1 专项 | team-security | opus | 安全门禁 ★ |
+| L1 专项 | team-performance | sonnet | 性能压测/调优 ★ |
+| L1 专项 | team-sre | sonnet | 可靠性设计 ★ |
+| L1 专项 | team-analyst | sonnet | 度量/埋点/分析 ★ |
+| **plugin** | team-mle | sonnet | 机器学习工程（按需装）|
+
+> ★ = 专项角色，按 trigger_when 触发条件介入
