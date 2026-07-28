@@ -14,6 +14,7 @@ public class Artifact extends BaseEntity {
     private String stage;
     private String type;
     private String title;
+    private String content;
     private String docKey;
     private String frontmatter;
     private Long derivationId;

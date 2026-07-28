@@ -147,6 +147,7 @@ CREATE TABLE `t_artifact` (
   `stage` VARCHAR(32) DEFAULT NULL,
   `type` VARCHAR(32) NOT NULL,
   `title` VARCHAR(200) DEFAULT NULL,
+  `content` MEDIUMTEXT DEFAULT NULL,
   `doc_key` VARCHAR(200) DEFAULT NULL,
   `frontmatter` JSON DEFAULT NULL,
   `derivation_id` BIGINT DEFAULT NULL,

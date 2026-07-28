@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS t_artifact (
   stage VARCHAR(32),
   type VARCHAR(32),
   title VARCHAR(200),
+  content CLOB,
   doc_key VARCHAR(200),
   frontmatter CLOB,
   derivation_id BIGINT,

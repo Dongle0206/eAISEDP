@@ -100,7 +100,13 @@ public class DerivationPersistenceService {
                 a.setRole(pa.getRole());
                 a.setType(pa.getType());
                 a.setDerivationId(d.getId());     // 异步路径=preassignedId；同步路径=save 回填的新 id
-                // title / docKey / frontmatter / contractKey / stage：ProducedArtifact 当前无字段，留 NULL（M2 填充）
+                // M2-F 过程资产完善（P10）：填充 content + frontmatter + docKey + contractKey
+                a.setContent(pa.getContent());
+                a.setDocKey(pa.getCaseId() + "-" + pa.getType() + "-" + d.getId());
+                a.setContractKey(pa.getType());
+                // frontmatter：结构化元数据（version/review_status/generated_by/model）
+                a.setFrontmatter(buildFrontmatter(pa, result));
+                a.setStage(result.getStatus());
                 arts.add(a);
             }
             artifactService.saveBatch(arts);
@@ -121,5 +127,21 @@ public class DerivationPersistenceService {
               .append("\",\"role\":\"").append(pa.getRole()).append("\"}");
         }
         return sb.append("]").toString();
+    }
+
+    /**
+     * 构建产物 frontmatter（结构化元数据，JSON 格式）。
+     * 包含：version / review_status / generated_by / model / tokens
+     */
+    private String buildFrontmatter(DerivationEngine.ProducedArtifact pa, DerivationEngine.DerivationResult result) {
+        StringBuilder sb = new StringBuilder("{");
+        sb.append("\"version\":\"1.0\"");
+        sb.append(",\"review_status\":\"draft\"");
+        sb.append(",\"generated_by\":\"").append(pa.getRole()).append("\"");
+        sb.append(",\"model\":\"").append(result.getModel() != null ? result.getModel() : "").append("\"");
+        sb.append(",\"input_tokens\":").append(result.getInputTokens() != null ? result.getInputTokens() : 0);
+        sb.append(",\"output_tokens\":").append(result.getOutputTokens() != null ? result.getOutputTokens() : 0);
+        sb.append("}");
+        return sb.toString();
     }
 }
