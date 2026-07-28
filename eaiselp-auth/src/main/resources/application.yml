@@ -27,3 +27,14 @@ eaiselp:
       expire-seconds: 86400
       issuer: eaiselp-auth
     force-https: false                                           # M2 开发期 false，生产 true
+management:                                                     # M3-1 监控告警：Actuator 端点 + Prometheus 指标暴露
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus                # 只暴露必需端点
+  endpoint:
+    health:
+      show-details: when_authorized
+  metrics:
+    tags:
+      application: eaiselp-auth

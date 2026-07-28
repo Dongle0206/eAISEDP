@@ -1,0 +1,22 @@
+# M3-1 监控告警：Prometheus 抓取配置
+# 抓取 eaiselp-runtime(:8081) 与 eaiselp-auth(:8085) 的 /actuator/prometheus 端点。
+#
+# 说明：
+# - Spring Boot 应用运行在宿主机（IDE / jar 启动，非 docker compose 网络内），
+#   容器内访问宿主机用 host.docker.internal（Linux 上 docker 20.10+ 已内置支持）。
+# - 若应用改为容器化部署，把 host.docker.internal 换成 compose service 名即可
+#   （如 targets: ['eaiselp-runtime:8081']）。
+global:
+  scrape_interval: 15s          # 抓取周期，与告警评估窗口对齐
+  evaluation_interval: 15s      # 规则评估周期
+
+scrape_configs:
+  - job_name: eaiselp-runtime
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['host.docker.internal:8081']
+
+  - job_name: eaiselp-auth
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['host.docker.internal:8085']

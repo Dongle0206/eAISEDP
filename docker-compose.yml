@@ -41,6 +41,28 @@ services:
     volumes:
       - minio_data:/data
 
+  # M3-1 监控告警：Prometheus 抓取 runtime:8081 / auth:8085 的 /actuator/prometheus 端点
+  # 注意：本机 Spring Boot 服务运行在宿主机（非 docker compose 网络内），故 targets 用 host.docker.internal
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: eaiselp-prometheus
+    restart: unless-stopped
+    ports: ["9090:9090"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  # M3-1 监控告警：Grafana 可视化面板，默认 admin/admin，数据源指向同网络 prometheus:9090
+  grafana:
+    image: grafana/grafana:latest
+    container_name: eaiselp-grafana
+    restart: unless-stopped
+    ports: ["3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+
 volumes:
   mysql_data:
   minio_data:
+  grafana_data:

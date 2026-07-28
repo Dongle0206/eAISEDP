@@ -64,3 +64,14 @@ eaiselp:
     bucket-max-size: 100000                                                    # 桶硬上限（防 OOM，超限告警，M3 换 Redis）
   task:                                                                        # M2-DFX 派生任务内存态治理（SE §5.2 / §11）
     memory-ttl-minutes: 60                                                     # 已完成任务内存态 60 分钟后清理
+management:                                                                    # M3-1 监控告警：Actuator 端点 + Prometheus 指标暴露
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus                               # 只暴露必需端点，info/env/loggers 等敏感端点关闭
+  endpoint:
+    health:                                                                    # health 端点详情：仅授权用户可见（防止未授权探测 DB/Nacos/磁盘连通性）
+      show-details: when_authorized
+  metrics:                                                                     # 所有指标统一打 application 标签，便于 Grafana 跨实例聚合
+    tags:
+      application: eaiselp-runtime
