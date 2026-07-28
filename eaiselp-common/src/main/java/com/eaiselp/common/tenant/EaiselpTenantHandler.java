@@ -14,7 +14,10 @@ public class EaiselpTenantHandler implements TenantLineHandler {
         // M2 Phase 1 新增：权限系统表为系统级共享，免 tenant 自动过滤
         "t_permission", "t_role", "t_role_permission", "t_user_role", "t_service_account",
         // M2 SP-6 新增：模型路由表为系统级全局配置（模型档位是平台级配置），免 tenant 自动过滤（ES-003 §2.5）
-        "t_model_routing"
+        "t_model_routing",
+        // M3-2 新增：审计日志按 tenant_id 显式记录（AuditService 从 LoginUser 取 tenant_id 写入），
+        // 不走拦截器自动注入（append-only 表，明细由 AuditService 显式控制更清晰）
+        "t_governance_log"
     };
 
     @Override

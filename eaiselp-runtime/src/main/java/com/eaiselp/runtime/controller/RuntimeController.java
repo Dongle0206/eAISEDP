@@ -5,6 +5,7 @@ import com.eaiselp.capability.model.AgentDefinition;
 import com.eaiselp.common.ratelimit.RateLimit;
 import com.eaiselp.common.result.R;
 import com.eaiselp.common.tenant.TenantContext;
+import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.task.DerivationAsyncRunner;
@@ -48,6 +49,7 @@ public class RuntimeController {
     private final CapabilityLoader capabilityLoader;
     private final DerivationAsyncRunner asyncRunner;
     private final DerivationTaskService taskService;
+    private final AuditService auditService;
 
     /**
      * 手动派生单角色（M2-DFX 异步化：立即返回 taskId）。
@@ -84,9 +86,17 @@ public class RuntimeController {
             // 注意：此时 createPending 已插入了 pending 行，属可接受的脏数据
             // （后续可由 markFailed 补写或定时清理；M2 dogfooding 可接受，SE §11）
             log.warn("[Derive] 派生线程池排队已满，拒绝 taskId={}, role={}", taskId, req.getRole());
+            // 审计：派生排队满失败
+            auditService.log("derive_rejected", "derivation", String.valueOf(taskId),
+                    "{\"role\":\"" + req.getRole() + "\",\"caseId\":\"" + req.getCaseId() + "\"}",
+                    "failure", "派生线程池排队已满");
             return ResponseEntity.status(503)
                     .body(R.fail(503, "当前派生任务排队已满，请稍后重试"));
         }
+        // 审计：派生发起（GRC 治理：LLM 调用可追溯）
+        auditService.log("derive_create", "derivation", String.valueOf(taskId),
+                "{\"role\":\"" + req.getRole() + "\",\"caseId\":\""
+                        + (req.getCaseId() == null ? "" : req.getCaseId()) + "\",\"taskId\":" + taskId + "}");
         // ④ 立即返回 202 Accepted + taskId（前端轮询 GET /derive/{taskId}）
         return ResponseEntity.accepted().body(R.ok(Map.of("taskId", taskId, "status", "pending")));
     }

@@ -444,3 +444,28 @@ INSERT IGNORE INTO `t_model_routing` (`id`, `tier`, `provider`, `model`, `priori
 (1007, 'opus',       'glm',      'glm-4-plus',     10, 'GLM_API_KEY',      'https://open.bigmodel.cn/api/paas/v4',                '历史档位名=reasoning'),
 (1008, 'sonnet',     'glm',      'glm-4',          10, 'GLM_API_KEY',      'https://open.bigmodel.cn/api/paas/v4',                '历史档位名=structured'),
 (1009, 'haiku',      'glm',      'glm-4-flash',    10, 'GLM_API_KEY',      'https://open.bigmodel.cn/api/paas/v4',                '历史档位名=mechanical');
+
+-- ============ M3-2：审计日志表（GRC 治理要求：操作可追溯，who/when/what/before/after）============
+-- 审计日志按 tenant_id 显式记录（落库时由 AuditService 从 LoginUser 取 tenant_id 写入 detail.tenant_id 字段，
+-- 表本身保留 tenant_id 列以便按租户隔离查询）。已加入 EaiselpTenantHandler.IGNORE_TABLES
+-- ——不走拦截器自动注入（拦截器在 INSERT 时只填 tenant_id，不会自动给审计日志的所有维度做隔离，
+-- 审计日志是只追加型 append-only 表，显式记录主操作上下文更清晰）。
+DROP TABLE IF EXISTS `t_governance_log`;
+CREATE TABLE `t_governance_log` (
+  `id` BIGINT NOT NULL,
+  `tenant_id` BIGINT NOT NULL DEFAULT 0,
+  `user_id` BIGINT DEFAULT NULL,
+  `username` VARCHAR(64) DEFAULT NULL,
+  `action` VARCHAR(64) NOT NULL,
+  `resource_type` VARCHAR(32) DEFAULT NULL,
+  `resource_id` VARCHAR(128) DEFAULT NULL,
+  `detail` JSON DEFAULT NULL,
+  `ip_address` VARCHAR(64) DEFAULT NULL,
+  `result` VARCHAR(16) NOT NULL DEFAULT 'success',
+  `error_msg` VARCHAR(500) DEFAULT NULL,
+  `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_tenant_user` (`tenant_id`, `user_id`),
+  KEY `idx_action` (`action`),
+  KEY `idx_create_time` (`create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审计日志表';

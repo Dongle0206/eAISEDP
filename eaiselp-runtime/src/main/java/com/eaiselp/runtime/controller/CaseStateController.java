@@ -5,6 +5,7 @@ import com.eaiselp.common.result.R;
 import com.eaiselp.common.security.JwtClaims;
 import com.eaiselp.common.security.LoginUser;
 import com.eaiselp.common.security.RequirePermission;
+import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.data.entity.Checkpoint;
 import com.eaiselp.data.service.CheckpointService;
 import com.eaiselp.runtime.casestate.CaseStateService;
@@ -43,6 +44,7 @@ public class CaseStateController {
 
     private final CaseStateService caseStateService;
     private final CheckpointService checkpointService;
+    private final AuditService auditService;
 
     // ======================== 状态流转 ========================
 
@@ -62,6 +64,9 @@ public class CaseStateController {
         String operator = resolveOperator();
         // 非法流转抛 IllegalStateTransitionException(BizException) → GlobalExceptionHandler 转 R.fail(400, msg)
         caseStateService.transit(caseId, target, operator);
+        // 审计：Case 状态流转（GRC 治理：状态变更可追溯）
+        auditService.log("case_transit", "case", caseId,
+                "{\"targetStatus\":\"" + target.dbValue() + "\",\"operator\":\"" + operator + "\"}");
         return R.ok(target.dbValue());
     }
 
@@ -97,6 +102,11 @@ public class CaseStateController {
         String operator = resolveOperator();
         String comment = req == null ? null : req.getComment();
         boolean ok = checkpointService.confirm(id, operator, comment);
+        // 审计：检查点确认（不可逆操作放行，GRC 关键审计点）
+        auditService.log("checkpoint_confirm", "checkpoint", String.valueOf(id),
+                "{\"operator\":\"" + operator + "\",\"comment\":\"" + safeJson(comment) + "\"}",
+                ok ? "success" : "failure",
+                ok ? null : "检查点不存在或已处理");
         return ok ? R.ok() : R.fail(409, "检查点不存在或已处理（非 pending 状态）");
     }
 
@@ -108,6 +118,11 @@ public class CaseStateController {
         String operator = resolveOperator();
         String comment = req == null ? null : req.getComment();
         boolean ok = checkpointService.reject(id, operator, comment);
+        // 审计：检查点拒绝（不可逆操作阻断，GRC 关键审计点）
+        auditService.log("checkpoint_reject", "checkpoint", String.valueOf(id),
+                "{\"operator\":\"" + operator + "\",\"comment\":\"" + safeJson(comment) + "\"}",
+                ok ? "success" : "failure",
+                ok ? null : "检查点不存在或已处理");
         return ok ? R.ok() : R.fail(409, "检查点不存在或已处理（非 pending 状态）");
     }
 
@@ -124,6 +139,13 @@ public class CaseStateController {
         }
         Long uid = LoginUser.getUserId();
         return uid != null ? String.valueOf(uid) : "anonymous";
+    }
+
+    /** 转义 JSON 字符串中的特殊字符（comment 来自请求体，需防 JSON 注入）。 */
+    private String safeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r");
     }
 
     // ======================== 请求体 DTO ========================

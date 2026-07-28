@@ -12,6 +12,8 @@
         <dependency><groupId>com.baomidou</groupId><artifactId>mybatis-plus-spring-boot3-starter</artifactId></dependency>
         <dependency><groupId>com.mysql</groupId><artifactId>mysql-connector-j</artifactId></dependency>
         <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-common</artifactId></dependency>
+        <!-- M3-3 新增：UserService 内 BCrypt 加密密码（仅 crypto，不引完整 spring-security，与 JWT 无状态冲突）-->
+        <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-crypto</artifactId></dependency>
     </dependencies>
     <!-- library 模块禁止配 spring-boot-maven-plugin / 依赖 nacos-discovery（同 capability，ADR-001 P2 / ES-001 §2.2 / QG G2+G5）-->
     <build><finalName>${project.artifactId}</finalName></build>

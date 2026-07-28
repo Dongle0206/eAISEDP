@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.eaiselp.common.constant.PlatformConst;
 import com.eaiselp.common.result.R;
 import com.eaiselp.common.security.RequirePermission;
+import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.data.entity.Artifact;
 import com.eaiselp.data.entity.Case;
 import com.eaiselp.data.entity.Derivation;
@@ -36,6 +37,7 @@ public class CaseController {
     private final CaseService caseService;
     private final DerivationService derivationService;
     private final ArtifactService artifactService;
+    private final AuditService auditService;
 
     /** 分页查询 Case，可选按 status 过滤。 */
     @GetMapping
@@ -77,6 +79,9 @@ public class CaseController {
         c.setStatus("drafting");
         c.setCurrentStage("stage_0");
         caseService.save(c);
+        // 审计：Case 创建（GRC 治理：操作可追溯）
+        auditService.log("case_create", "case", c.getCaseId(),
+                "{\"title\":\"" + c.getTitle() + "\",\"layer\":\"" + c.getLayer() + "\"}");
         return R.ok(c);
     }
 

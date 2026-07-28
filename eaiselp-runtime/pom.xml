@@ -18,6 +18,8 @@
         <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-capability</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-adapter</artifactId><version>${project.version}</version></dependency>
         <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-data</artifactId><version>${project.version}</version></dependency>
+        <!-- M3-3 新增：用户管理 CRUD 需 BCrypt 加密密码（仅 crypto，不引完整 spring-security，与 JWT 无状态冲突）-->
+        <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-crypto</artifactId></dependency>
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
