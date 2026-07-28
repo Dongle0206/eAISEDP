@@ -1,6 +1,10 @@
 package com.eaiselp.runtime.task;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.eaiselp.common.exception.QuotaExceededException;
 import com.eaiselp.data.entity.Derivation;
+import com.eaiselp.data.entity.Quota;
+import com.eaiselp.data.mapper.QuotaMapper;
 import com.eaiselp.data.service.DerivationService;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +14,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Iterator;
 import java.util.Map;
@@ -20,7 +25,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>职责：
  * <ol>
- *   <li>{@link #createPending}：雪花生成 id → INSERT pending 占位行 → 内存 put → 返回 id；</li>
+ *   <li>{@link #createPending}：雪花生成 id → INSERT pending 占位行 → 内存 put → 返回 id；
+ *       <b>提交前先做配额强校验</b>（M2 SP-7，{@link #checkQuotaBeforeSubmit}），超限抛
+ *       {@link QuotaExceededException}（→ HTTP 429），任何 DB 写之前拒绝；</li>
  *   <li>{@link #markRunning}：内存 + DB 标 running；</li>
  *   <li>{@link #markSuccess}：内存填 result（DB success 已由 engine.derive 内部 persist UPDATE 完成）；</li>
  *   <li>{@link #markFailed}：内存填 error + DB 显式 UPDATE status=failed/error_msg
@@ -46,6 +53,13 @@ public class DerivationTaskService {
 
     private final DerivationService derivationService;
 
+    /**
+     * 配额 Mapper（M2 SP-7，ES-003 §9.3 P11）。
+     * <p>t_quota 走 MyBatis-Plus 租户拦截器（不在 IGNORE_TABLES），自动按当前租户过滤，
+     * 故此处查到的 quota 必属当前租户当月记录（G13）。
+     */
+    private final QuotaMapper quotaMapper;
+
     /** 内存任务态表：taskId → state。软上限 1 万防 OOM（SE §5.2）。 */
     private final ConcurrentHashMap<Long, DerivationTaskState> memoryMap = new ConcurrentHashMap<>();
 
@@ -69,6 +83,9 @@ public class DerivationTaskService {
      * @return taskId（= t_derivation.id）
      */
     public Long createPending(String role, String caseId, String stage) {
+        // M2 SP-7：提交前强校验租户当月配额（派生次数 + token 消耗），超限抛 QuotaExceededException → 429。
+        // 放在最前面：任何 DB 写之前拒绝，保证不产生脏 pending 行。
+        checkQuotaBeforeSubmit();
         LocalDateTime now = LocalDateTime.now();
         Derivation d = new Derivation();
         d.setRole(role);
@@ -89,6 +106,54 @@ public class DerivationTaskService {
                 .lastAccessAt(System.currentTimeMillis())
                 .build());
         return taskId;
+    }
+
+    /**
+     * 提交前配额强校验（M2 SP-7，ES-003 §9.3 P11）。
+     *
+     * <p>校验当前租户当月（{@code t_quota.period = 'yyyy-MM'}）两项额度：
+     * <ol>
+     *   <li><b>派生次数</b>：本月已派生次数（实时 COUNT t_derivation）{@code < derivation_limit}；</li>
+     *   <li><b>token 消耗</b>：本月已消耗 token（实时 SUM input+output）{@code < token_limit}。</li>
+     * </ol>
+     * 任一超限抛 {@link QuotaExceededException}（→ HTTP 429）。
+     *
+     * <p><b>为何用实时统计而非 t_quota.derivation_used/token_used</b>：
+     * t_quota 的 *_used 字段需异步回写，存在延迟与一致性窗口；直接对 t_derivation 做 COUNT/SUM
+     * 是「真实消费」的强一致口径，避免配额计数滞后被绕过。t_quota 只取 limit 阈值（配置侧）。
+     *
+     * <p><b>无配额记录兜底</b>：当前租户当月无 t_quota 行（如新租户/新月分未初始化）时，
+     * 不阻断派生（放行）——配额初始化属租户开通流程，此处不承担开通职责，避免误伤正常派生。
+     *
+     * <p><b>多租户</b>：t_quota / t_derivation 均经 MyBatis-Plus 租户拦截器按 TenantContext 过滤（G13）。
+     */
+    void checkQuotaBeforeSubmit() {
+        String period = LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"));
+        // 查当月配额阈值（period + 当前租户，由拦截器注入 tenant_id 过滤）
+        Quota quota = quotaMapper.selectOne(new LambdaQueryWrapper<Quota>().eq(Quota::getPeriod, period));
+        if (quota == null) {
+            // 无配额记录：放行（配额初始化属租户开通流程，不在此阻断）
+            log.debug("[Quota] 当前租户当月({})无配额记录，放行派生", period);
+            return;
+        }
+        // 当月已派生次数 + token 消耗（实时统计 t_derivation，强一致口径）
+        LocalDateTime monthStart = LocalDate.now().withDayOfMonth(1).atStartOfDay();
+        long usedCount = derivationService.countSince(monthStart);
+        long usedTokens = derivationService.sumTokensSince(monthStart);
+        // 1. 派生次数校验
+        Integer derivationLimit = quota.getDerivationLimit();
+        if (derivationLimit != null && usedCount >= derivationLimit) {
+            throw new QuotaExceededException("derivation",
+                    "当月派生次数已达上限（" + usedCount + "/" + derivationLimit + "），请下月重试或升级配额");
+        }
+        // 2. token 消耗校验
+        Long tokenLimit = quota.getTokenLimit();
+        if (tokenLimit != null && usedTokens >= tokenLimit) {
+            throw new QuotaExceededException("token",
+                    "当月 token 消耗已达上限（" + usedTokens + "/" + tokenLimit + "），请下月重试或升级配额");
+        }
+        log.debug("[Quota] 配额校验通过 period={} derivation={}/{} token={}/{}",
+                period, usedCount, derivationLimit, usedTokens, tokenLimit);
     }
 
     /** pending → running（异步线程拿到任务后调）。内存 + DB 同步。 */

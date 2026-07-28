@@ -1,6 +1,7 @@
 package com.eaiselp.common.web;
 
 import com.eaiselp.common.exception.BizException;
+import com.eaiselp.common.exception.QuotaExceededException;
 import com.eaiselp.common.ratelimit.RateLimitedException;
 import com.eaiselp.common.result.R;
 import com.eaiselp.common.result.ResultCode;
@@ -46,6 +47,20 @@ public class GlobalExceptionHandler {
         log.info("[RateLimit] 429 限流触发: msg={}", e.getMessage());
         return ResponseEntity.status(429)
                 .header("Retry-After", String.valueOf(e.getRetryAfterSeconds()))
+                .body(R.fail(429, e.getMessage()));
+    }
+
+    /**
+     * 配额超限（M2 SP-7，ES-003 §9.3）：返回 HTTP 429。
+     *
+     * <p>与限流同属「资源耗尽类拒绝」，复用 429 状态码语义。区别：
+     * 限流是瞬时速率超限（Retry-After 后可重试），配额是当月累计额度耗尽
+     * （次月重置前重试无意义），故不挂 Retry-After 头。
+     */
+    @ExceptionHandler(QuotaExceededException.class)
+    public ResponseEntity<R<Void>> handleQuotaExceeded(QuotaExceededException e) {
+        log.info("[Quota] 429 配额超限触发: type={}, msg={}", e.getQuotaType(), e.getMessage());
+        return ResponseEntity.status(429)
                 .body(R.fail(429, e.getMessage()));
     }
 }
