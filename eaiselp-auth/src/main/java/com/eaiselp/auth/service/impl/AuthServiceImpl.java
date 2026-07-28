@@ -33,7 +33,9 @@ public class AuthServiceImpl implements AuthService {
     private final TenantMapper tenantMapper;
     private final PermissionService permissionService;
     private final JwtUtil jwtUtil;
-    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+    private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder(12);
+    /** 防枚举：用户不存在时用这个 dummy hash 跑一次 BCrypt，保证响应时长恒定 */
+    private static final String DUMMY_HASH = "$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 
     /** Phase 1 单租户 dogfooding：默认租户 ID。M3 多租户登录页选租户时改为动态。 */
     @Value("${eaiselp.security.default-tenant-id:1}")
@@ -46,10 +48,15 @@ public class AuthServiceImpl implements AuthService {
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
                 .eq(User::getTenantId, defaultTenantId)
                 .eq(User::getUsername, req.getUsername()));
-        // 2-3. 用户不存在或密码错 → 统一 40001（防枚举，PRD §5.1.3 安全约定）
-        //   即便 user==null 也要走一次 BCrypt 校验（恒定时间，避免通过响应时长区分用户存在性）——
-        //   Phase 1 简化：null 直接返回，响应时长差异在 dogfooding 内网可接受；M3 加恒定时延。
-        if (user == null || !passwordEncoder.matches(req.getPassword(), user.getPassword())) {
+        // 2-3. 用户不存在或密码错 → 统一 40001（防枚举，DFX 安全加固）
+        //   用户不存在时也跑一次 dummy BCrypt 校验，保证响应时长恒定（防时间侧信道枚举）
+        if (user == null) {
+            passwordEncoder.matches(req.getPassword(), DUMMY_HASH); // 恒定时延
+            log.info("[Login] 凭据错误: username={}, tenantId={}, 耗时={}ms",
+                    req.getUsername(), defaultTenantId, System.currentTimeMillis() - start);
+            throw new BizException(ResultCode.BAD_CREDENTIAL, "用户名或密码错误");
+        }
+        if (!passwordEncoder.matches(req.getPassword(), user.getPassword())) {
             log.info("[Login] 凭据错误: username={}, tenantId={}, 耗时={}ms",
                     req.getUsername(), defaultTenantId, System.currentTimeMillis() - start);
             throw new BizException(ResultCode.BAD_CREDENTIAL, "用户名或密码错误");

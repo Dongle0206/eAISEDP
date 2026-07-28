@@ -1,20 +1,31 @@
 package com.eaiselp.common.web;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * 开发期 CORS：允许前端（file:// 或 localhost:5500 等）跨域访问。
- * auth(8085)/runtime(8081) 两 service 扫到 common 时都生效。
- * 生产需收紧 origin。
+ * CORS 配置（DFX 安全加固）。
+ *
+ * origin 白名单通过 eaiselp.cors.allowed-origins 配置（逗号分隔），
+ * 开发期默认允许 localhost 各端口 + 部署机 IP。
+ * 生产环境必须收紧为实际前端域名。
  */
 @Configuration
 public class CorsConfig implements WebMvcConfigurer {
+
+    @Value("${eaiselp.cors.allowed-origins:http://localhost:8080,http://localhost:8081,http://localhost:8085,http://127.0.0.1:8080,http://172.16.180.166:8080,http://172.16.180.87:8080}")
+    private String allowedOrigins;
+
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        String[] origins = allowedOrigins.split(",");
+        for (int i = 0; i < origins.length; i++) {
+            origins[i] = origins[i].trim();
+        }
         registry.addMapping("/api/**")
-                .allowedOriginPatterns("*")
+                .allowedOrigins(origins)
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*")
                 .exposedHeaders("Authorization")
