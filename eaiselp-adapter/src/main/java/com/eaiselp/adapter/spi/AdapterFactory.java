@@ -39,4 +39,30 @@ public interface AdapterFactory {
     default String resolveModel(String tier) {
         return tier;
     }
+
+    /**
+     * EA 蓝图 §4.3 适配器体系扩展：新增 4 个企业适配器（Ticket/CICD/IM/MCP）。
+     *
+     * <p>均以 default 方法提供 SPI 框架扩展，默认实现抛 {@link UnsupportedOperationException}
+     * 保持向后兼容——只有需要对应能力的 Factory 实现（如 {@code DefaultAdapterFactory}）才重写，
+     * 其他 Factory 实现可继续不感知这些新适配器。
+     *
+     * <p>语义：返回首个 {@code isAvailable()} 的适配器；无可用时返回 null（区别于 Git/Llm/DocStore 的抛异常——
+     * 这 4 个是企业可选能力，未接入时上层应能容忍 null 并走降级路径，而非中断派生）。
+     */
+    default TicketAdapter getTicketAdapter() {
+        throw new UnsupportedOperationException("TicketAdapter 未装配");
+    }
+
+    default CICDAdapter getCICDAdapter() {
+        throw new UnsupportedOperationException("CICDAdapter 未装配");
+    }
+
+    default IMAdapter getIMAdapter() {
+        throw new UnsupportedOperationException("IMAdapter 未装配");
+    }
+
+    default MCPAdapter getMCPAdapter() {
+        throw new UnsupportedOperationException("MCPAdapter 未装配");
+    }
 }

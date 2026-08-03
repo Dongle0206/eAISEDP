@@ -4,6 +4,7 @@ import com.eaiselp.adapter.routing.entity.ModelRouting;
 import com.eaiselp.adapter.routing.service.ModelRoutingService;
 import com.eaiselp.adapter.spi.*;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -33,6 +34,22 @@ public class DefaultAdapterFactory implements AdapterFactory {
     private final Map<String, LlmAdapter> llmAdapterByProvider;
 
     private final ModelRoutingService modelRoutingService;
+
+    /**
+     * EA 蓝图 §4.3 企业适配器（Ticket/CICD/IM/MCP）——可选注入。
+     *
+     * <p>用 {@code @Autowired(required=false)}：这 4 类是企业可选能力，stub 默认实现靠
+     * {@code @ConditionalOnProperty(enabled=true)} 控制装配，多数环境装配量为 0。
+     * 此处容忍 null，{@code get*Adapter()} 返回 null 让上层走降级路径。
+     */
+    @Autowired(required = false)
+    private List<TicketAdapter> ticketAdapters;
+    @Autowired(required = false)
+    private List<CICDAdapter> cicdAdapters;
+    @Autowired(required = false)
+    private List<IMAdapter> imAdapters;
+    @Autowired(required = false)
+    private List<MCPAdapter> mcpAdapters;
 
     public DefaultAdapterFactory(List<GitAdapter> g, List<LlmAdapter> l, List<DocStoreAdapter> d,
                                  ModelRoutingService modelRoutingService) {
@@ -99,5 +116,39 @@ public class DefaultAdapterFactory implements AdapterFactory {
     @Override public DocStoreAdapter getDocStoreAdapter() {
         return docStoreAdapters.stream().filter(DocStoreAdapter::isAvailable).findFirst()
                 .orElseThrow(() -> new IllegalStateException("无可用 DocStoreAdapter"));
+    }
+
+    /**
+     * EA 蓝图 §4.3 企业适配器：返回首个 isAvailable 的 Bean；无可用或未装配返回 null
+     * （区别于 Git/Llm/DocStore 的抛异常——这 4 个是企业可选能力，上层容忍 null 走降级）。
+     */
+    @Override public TicketAdapter getTicketAdapter() {
+        return pick(ticketAdapters, "TicketAdapter");
+    }
+
+    @Override public CICDAdapter getCICDAdapter() {
+        return pick(cicdAdapters, "CICDAdapter");
+    }
+
+    @Override public IMAdapter getIMAdapter() {
+        return pick(imAdapters, "IMAdapter");
+    }
+
+    @Override public MCPAdapter getMCPAdapter() {
+        return pick(mcpAdapters, "MCPAdapter");
+    }
+
+    /** 从可选注入的 Adapter 列表里挑首个 isAvailable 的；列表为空或全不可用返回 null。 */
+    private <T extends Adapter> T pick(List<T> adapters, String name) {
+        if (adapters == null || adapters.isEmpty()) {
+            return null;
+        }
+        return adapters.stream()
+                .filter(Adapter::isAvailable)
+                .findFirst()
+                .orElseGet(() -> {
+                    log.warn("[AdapterFactory] {} 已装配但全部 isAvailable=false（如 stub 未配 enabled）", name);
+                    return null;
+                });
     }
 }
