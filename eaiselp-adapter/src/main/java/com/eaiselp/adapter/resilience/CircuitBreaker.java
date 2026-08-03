@@ -96,12 +96,10 @@ public class CircuitBreaker {
     }
 
     private void tripOpen() {
-        // 进入 OPEN：记录时间戳（若已是 OPEN 不刷新，保留最早一次进入时间用于冷却计时），
-        // 再切状态。并发下多个线程同时 trip 也只是重复 set 同一 OPEN，幂等无害。
-        if (state.get() != State.OPEN) {
-            openSince.compareAndSet(0L, System.currentTimeMillis());
-            state.set(State.OPEN);
-        }
+        // 进入 OPEN：无条件刷新时间戳（HALF_OPEN→OPEN 也必须重置冷却计时，
+        // 否则旧 openSince 导致 30s 冷却被绕过——Reviewer D1 阻断修复）
+        openSince.set(System.currentTimeMillis());
+        state.set(State.OPEN);
     }
 
     /** 当前状态（观测/测试用）。 */
