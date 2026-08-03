@@ -81,7 +81,7 @@ public class CaseController {
         caseService.save(c);
         // 审计：Case 创建（GRC 治理：操作可追溯）
         auditService.log("case_create", "case", c.getCaseId(),
-                "{\"title\":\"" + c.getTitle() + "\",\"layer\":\"" + c.getLayer() + "\"}");
+                "{\"title\":\"" + safeJson(c.getTitle()) + "\",\"layer\":\"" + c.getLayer() + "\"}");
         return R.ok(c);
     }
 
@@ -103,5 +103,11 @@ public class CaseController {
     public static class CreateCaseRequest {
         private String title;
         private String description;
+    }
+
+    /** JSON 字符串转义（审计 detail 防注入） */
+    private static String safeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 }
