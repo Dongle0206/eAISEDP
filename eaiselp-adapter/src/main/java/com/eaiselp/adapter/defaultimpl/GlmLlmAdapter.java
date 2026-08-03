@@ -1,5 +1,6 @@
 package com.eaiselp.adapter.defaultimpl;
 
+import com.eaiselp.adapter.resilience.LlmCircuitBreaker;
 import com.eaiselp.adapter.routing.entity.ModelRouting;
 import com.eaiselp.adapter.routing.service.ModelRoutingService;
 import com.eaiselp.adapter.spi.LlmAdapter;
@@ -54,6 +55,13 @@ public class GlmLlmAdapter implements LlmAdapter {
     @Autowired(required = false)
     private ModelRoutingService modelRoutingService;
 
+    /**
+     * 熔断器门面（按 provider 维护）。required=false：单测 new GlmLlmAdapter() 无 Spring 容器，
+     * 此字段为 null 时 invoke 内判空跳过熔断检查（保持原有未熔断行为，不影响主路径单测）。
+     */
+    @Autowired(required = false)
+    private LlmCircuitBreaker circuitBreaker;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override public String getType() { return "llm"; }
@@ -85,6 +93,11 @@ public class GlmLlmAdapter implements LlmAdapter {
         long start = System.currentTimeMillis();
         if (!isAvailable()) {
             throw new IllegalStateException("GLM API Key 未配置 (eaiselp.adapter.llm.glm.api-key / 环境变量 GLM_API_KEY)");
+        }
+        // 熔断检查：OPEN 状态下快速失败，避免持续打挂的下游雪崩。circuitBreaker 为 null（单测无容器）时跳过。
+        if (circuitBreaker != null && !circuitBreaker.allowRequest("glm")) {
+            log.warn("[LlmAdapter-GLM] 熔断中，拒绝请求 model={}", model);
+            throw new RuntimeException("AI服务熔断中");
         }
         // M2 SP-6：model 参数即具体 GLM 模型名（由 ModelRoutingService 按 tier 解析后传入），null/空兜底到 glm-4
         final String resolvedModel = (model == null || model.isBlank()) ? "glm-4" : model;
@@ -127,6 +140,10 @@ public class GlmLlmAdapter implements LlmAdapter {
             Integer inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt() : null;
             Integer outputTokens = usage.has("completion_tokens") ? usage.get("completion_tokens").asInt() : null;
 
+            // 成功：重置熔断失败计数，状态回 CLOSED
+            if (circuitBreaker != null) {
+                circuitBreaker.recordSuccess("glm");
+            }
             return LlmResponse.builder()
                     .content(content)
                     .inputTokens(inputTokens)
@@ -136,9 +153,17 @@ public class GlmLlmAdapter implements LlmAdapter {
                     .finishReason(finishReason)
                     .build();
         } catch (RuntimeException e) {
+            // 失败：累计熔断失败计数（HTTP 错误等 RuntimeException 透传前先记账）
+            if (circuitBreaker != null) {
+                circuitBreaker.recordFailure("glm");
+            }
             // onStatus 抛出的 RuntimeException 直接透传（已含 model + status 上下文）
             throw e;
         } catch (Exception e) {
+            // 失败：累计熔断失败计数（Jackson/IO 异常等）
+            if (circuitBreaker != null) {
+                circuitBreaker.recordFailure("glm");
+            }
             // Jackson 解析异常、网络 IO 异常（含 SocketTimeoutException 超时）等
             log.error("[LlmAdapter-GLM] 调用失败 model={}, err={}", resolvedModel, e.getMessage(), e);
             throw new RuntimeException("GLM 调用失败 [model=" + resolvedModel + "]: " + e.getMessage(), e);
