@@ -16,5 +16,19 @@
         <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-crypto</artifactId></dependency>
     </dependencies>
     <!-- library 模块禁止配 spring-boot-maven-plugin / 依赖 nacos-discovery（同 capability，ADR-001 P2 / ES-001 §2.2 / QG G2+G5）-->
-    <build><finalName>${project.artifactId}</finalName></build>
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <!-- Wave3 单测：JDK 26 + Mockito/ByteBuddy 兼容（同 eaiselp-runtime）。
+                 ByteBuddy 官方支持到 Java 22，JDK 26 需开启 experimental 模式才能生成 mock 字节码
+                 （本模块仅 mock Mapper 接口，严格说接口 mock 不触发 final 类插桩，但显式声明保证 QA 跑 mvn test 不漏 -D 参数）。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-Dnet.bytebuddy.experimental=true</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>
