@@ -106,7 +106,7 @@ public class DerivationPersistenceService {
                 a.setContractKey(pa.getType());
                 // frontmatter：结构化元数据（version/review_status/generated_by/model）
                 a.setFrontmatter(buildFrontmatter(pa, result));
-                a.setStage(result.getStatus());
+                a.setStage(pa.getType());  // P2-D2 修复：stage 用产物类型（prd/review/test），不用派生状态(success)
                 arts.add(a);
             }
             artifactService.saveBatch(arts);
@@ -114,34 +114,40 @@ public class DerivationPersistenceService {
     }
 
     /**
-     * 产物摘要 JSON：[{"type":"prd","role":"team-po"},...]。
-     * M1.2 不引 Jackson，用字符串拼接；M2 改 ObjectMapper（SE §1.6.1 改动 3 注释）。
+     * 产物摘要 JSON（P2-D1 修复：改用 ObjectMapper 替代手工拼接，防 MySQL JSON 严格列报错）。
      */
+    private static final com.fasterxml.jackson.databind.ObjectMapper OM = new com.fasterxml.jackson.databind.ObjectMapper();
+
     private String summarizeArtifacts(List<DerivationEngine.ProducedArtifact> artifacts) {
         if (artifacts == null || artifacts.isEmpty()) return null;
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < artifacts.size(); i++) {
-            DerivationEngine.ProducedArtifact pa = artifacts.get(i);
-            if (i > 0) sb.append(",");
-            sb.append("{\"type\":\"").append(pa.getType())
-              .append("\",\"role\":\"").append(pa.getRole()).append("\"}");
+        try {
+            var list = new java.util.ArrayList<java.util.Map<String, String>>();
+            for (var pa : artifacts) {
+                list.add(java.util.Map.of("type", pa.getType(), "role", pa.getRole()));
+            }
+            return OM.writeValueAsString(list);
+        } catch (Exception e) {
+            log.warn("[Persist] summarizeArtifacts JSON 序列化失败", e);
+            return null;
         }
-        return sb.append("]").toString();
     }
 
     /**
-     * 构建产物 frontmatter（结构化元数据，JSON 格式）。
-     * 包含：version / review_status / generated_by / model / tokens
+     * 构建产物 frontmatter（P2-D1 修复：改用 ObjectMapper 替代手工拼接）。
      */
     private String buildFrontmatter(DerivationEngine.ProducedArtifact pa, DerivationEngine.DerivationResult result) {
-        StringBuilder sb = new StringBuilder("{");
-        sb.append("\"version\":\"1.0\"");
-        sb.append(",\"review_status\":\"draft\"");
-        sb.append(",\"generated_by\":\"").append(pa.getRole()).append("\"");
-        sb.append(",\"model\":\"").append(result.getModel() != null ? result.getModel() : "").append("\"");
-        sb.append(",\"input_tokens\":").append(result.getInputTokens() != null ? result.getInputTokens() : 0);
-        sb.append(",\"output_tokens\":").append(result.getOutputTokens() != null ? result.getOutputTokens() : 0);
-        sb.append("}");
-        return sb.toString();
+        try {
+            var map = new java.util.LinkedHashMap<String, Object>();
+            map.put("version", "1.0");
+            map.put("review_status", "draft");
+            map.put("generated_by", pa.getRole());
+            map.put("model", result.getModel() != null ? result.getModel() : "");
+            map.put("input_tokens", result.getInputTokens() != null ? result.getInputTokens() : 0);
+            map.put("output_tokens", result.getOutputTokens() != null ? result.getOutputTokens() : 0);
+            return OM.writeValueAsString(map);
+        } catch (Exception e) {
+            log.warn("[Persist] buildFrontmatter JSON 序列化失败", e);
+            return null;
+        }
     }
 }
