@@ -121,7 +121,27 @@ public class CapabilityLoader {
         } catch (Exception e) { return "unknown"; }
     }
 
-    public AgentDefinition getAgent(String name) { return agents.get(name); }
+    /**
+     * 按名称查找角色定义。
+     *
+     * <p>支持两种 key 形态（防御性兼容，DFX 容错）：</p>
+     * <ul>
+     *   <li>完整注册名：{@code team-po}、{@code team-dev}（frontmatter name 字段，权威）</li>
+     *   <li>短码别名：{@code po}、{@code dev}（前端下拉框可能传短码，自动补 {@code team-} 前缀兜底）</li>
+     * </ul>
+     * <p>注意：短码兜底仅为过渡容错，前端应统一使用 {@code team-} 前缀（权威契约）。
+     * 若短码和完整名都 miss，返回 null。</p>
+     */
+    public AgentDefinition getAgent(String name) {
+        if (name == null || name.isBlank()) return null;
+        AgentDefinition def = agents.get(name);
+        if (def != null) return def;
+        // 短码兜底：未命中且不以 team- 开头，尝试补前缀
+        if (!name.startsWith("team-")) {
+            return agents.get("team-" + name);
+        }
+        return null;
+    }
     public SkillDefinition getSkill(String name) { return skills.get(name); }
     public CommandDefinition getCommand(String name) { return commands.get(name); }
     public Collection<AgentDefinition> listAgents() { return Collections.unmodifiableCollection(agents.values()); }
