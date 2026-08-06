@@ -19,7 +19,7 @@ echo ============================================
 echo.
 
 REM ---- 配置区（按实际路径修改）----
-set "BACKEND_DIR=D:\eaiselp\platform"
+set "EAISELP_HOME=D:\eaiselp\platform"
 set "WEB_DIR=D:\eaiselp\web"
 set "BACKEND_REPO=https://github.com/Dongle0206/eAISEDP.git"
 set "WEB_REPO=https://github.com/Dongle0206/eAISEDP-web.git"
@@ -32,13 +32,13 @@ echo.
 
 REM ---- Step 2: 拉取后端最新代码 ----
 echo [2/5] 更新后端代码...
-if not exist "%BACKEND_DIR%" (
+if not exist "%EAISELP_HOME%" (
     echo   后端目录不存在，请先 git clone %BACKEND_REPO%
-    echo   或修改本脚本的 BACKEND_DIR 变量指向实际路径
+    echo   或修改本脚本的 EAISELP_HOME 变量指向实际路径
     pause
     exit /b 1
 )
-cd /d "%BACKEND_DIR%"
+cd /d "%EAISELP_HOME%"
 echo   git pull...
 git pull origin main 2>nul
 if errorlevel 1 (
@@ -53,8 +53,8 @@ echo   检查 JDK 版本...
 java -version 2>&1 | findstr /i "version"
 echo.
 echo   开始 Maven 编译（跳过测试加速，如需测试去掉 -DskipTests）...
-cd /d "%BACKEND_DIR%"
-call mvn clean package -DskipTests -q
+cd /d "%EAISELP_HOME%"
+call mvn clean package -DskipTests
 if errorlevel 1 (
     echo   [错误] Maven 编译失败！请检查 JDK 版本是否为 17+
     echo   当前 JDK:
@@ -85,6 +85,11 @@ echo.
 REM ---- Step 5: 启动服务 ----
 echo [5/5] 启动后端服务...
 call "%~dp0_common.bat" :start_services
+if errorlevel 1 (
+    echo   [错误] 服务启动失败，请检查上方输出
+    pause
+    exit /b 1
+)
 echo   [OK]
 echo.
 
