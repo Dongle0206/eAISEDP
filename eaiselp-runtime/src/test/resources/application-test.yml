@@ -31,6 +31,20 @@ mybatis-plus:
 eaiselp:
   tenant:
     mode: shared
+  artifact:                                  # SP-4 产物类型映射（与生产 application.yml 对齐）
+    default-type: other
+    type-mapping:
+      team-po: prd
+      team-ux: design
+      team-se: tech-design
+      team-ba: tasks
+      team-dev: code
+      team-reviewer: review
+      team-security: review
+      team-qa: test
+      team-performance: perf
+      team-ops: deploy
+      team-pm: tracking
   system:
     path: ./nonexistent-agents-config-test   # 测试不依赖体系文件加载
     auto-refresh: false

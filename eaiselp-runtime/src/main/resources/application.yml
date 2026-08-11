@@ -35,6 +35,20 @@ mybatis-plus:                                                    # M1.2 新增�
       logic-delete-value: 1
       logic-not-delete-value: 0
 eaiselp:
+  artifact:                                                                    # SP-4：产物类型映射（清除 P6 硬编码，新增角色只改 yml 不动 Java）
+    default-type: other                                                        # 未匹配时的兜底类型
+    type-mapping:                                                              # 角色名(agent.name) → 产物类型
+      team-po: prd
+      team-ux: design
+      team-se: tech-design
+      team-ba: tasks
+      team-dev: code
+      team-reviewer: review
+      team-security: review
+      team-qa: test
+      team-performance: perf
+      team-ops: deploy
+      team-pm: tracking
   system:
     path: ${SYSTEM_PATH:../agents-config}
   web:                                                                        # M2 前后端分离：runtime 托管前端静态文件（消除跨域）

@@ -3,6 +3,7 @@ package com.eaiselp.runtime.engine;
 import com.eaiselp.adapter.spi.AdapterFactory;
 import com.eaiselp.adapter.spi.LlmAdapter;
 import com.eaiselp.capability.model.AgentDefinition;
+import com.eaiselp.runtime.config.ArtifactTypeMappingProperties;
 import com.eaiselp.runtime.context.ContextAssembler;
 import com.eaiselp.runtime.context.DerivationContext;
 import lombok.Data;
@@ -24,12 +25,15 @@ public class DerivationEngine {
     private final AdapterFactory adapterFactory;
     private final ContextAssembler contextAssembler;
     private final DerivationPersistenceService persistenceService;   // M1.2 新增：独立 Bean 承载 @Transactional
+    private final ArtifactTypeMappingProperties artifactTypeMapping; // SP-4：产物类型映射（清除 P6 硬编码）
 
     public DerivationEngine(AdapterFactory af, ContextAssembler ca,
-                            DerivationPersistenceService persistenceService) {
+                            DerivationPersistenceService persistenceService,
+                            ArtifactTypeMappingProperties artifactTypeMapping) {
         this.adapterFactory = af;
         this.contextAssembler = ca;
         this.persistenceService = persistenceService;
+        this.artifactTypeMapping = artifactTypeMapping;
     }
 
     public DerivationResult derive(AgentDefinition agent, String task, String caseId, DerivationContext ctx) {
@@ -84,21 +88,19 @@ public class DerivationEngine {
                 .type(guessType(role)).role(role).caseId(caseId).content(c).build());
     }
 
+    /**
+     * 产物类型推断（SP-4 重构：原硬编码 13 个角色名的 switch 已清除，改为配置驱动）。
+     *
+     * <p>映射规则从 {@code application.yml} 的 {@code eaiselp.artifact.type-mapping} 读取，
+     * 未匹配则返回 {@code eaiselp.artifact.default-type}（默认 other）。
+     * 新增角色只需改 yml，不动 Java 源码（P6 铁律合规）。</p>
+     *
+     * @see com.eaiselp.runtime.config.ArtifactTypeMappingProperties
+     */
     private String guessType(String role) {
-        if (role == null) return "unknown";
-        return switch (role) {
-            case "team-po" -> "prd";
-            case "team-ux" -> "design";
-            case "team-se" -> "tech-design";
-            case "team-ba" -> "tasks";
-            case "team-dev" -> "code";
-            case "team-reviewer", "team-security" -> "review";
-            case "team-qa" -> "test";
-            case "team-performance" -> "perf";
-            case "team-ops" -> "deploy";
-            case "team-pm" -> "tracking";
-            default -> "other";
-        };
+        if (role == null) return artifactTypeMapping.getDefaultType();
+        String type = artifactTypeMapping.getTypeMapping().get(role);
+        return type != null ? type : artifactTypeMapping.getDefaultType();
     }
 
     @Data @lombok.Builder
