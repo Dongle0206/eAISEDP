@@ -41,7 +41,7 @@ class DashboardControllerTest {
     @Test
     void overview_正常聚合() {
         // groupBy 返回 2 个状态有数据
-        when(caseService.listMaps(any())).thenReturn(List.of(
+        when(caseService.listMaps(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(
                 Map.of("status", "drafting", "cnt", 3),
                 Map.of("status", "done", "cnt", 5)
         ));
@@ -66,7 +66,7 @@ class DashboardControllerTest {
 
     @Test
     void overview_空数据_零值() {
-        when(caseService.listMaps(any())).thenReturn(List.of());
+        when(caseService.listMaps(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of());
         when(derivationService.countAndTokensByRole()).thenReturn(List.of());
         when(artifactService.count()).thenReturn(0L);
         when(checkpointService.count(any())).thenReturn(0L);
@@ -82,7 +82,7 @@ class DashboardControllerTest {
 
     @Test
     void caseStats_6状态齐全_零计数补0() {
-        when(caseService.listMaps(any())).thenReturn(List.of(
+        when(caseService.listMaps(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of(
                 Map.of("status", "deriving", "cnt", 2)
         ));
 
@@ -104,7 +104,7 @@ class DashboardControllerTest {
 
     @Test
     void caseStats_全部空_6个零() {
-        when(caseService.listMaps(any())).thenReturn(List.of());
+        when(caseService.listMaps(any(com.baomidou.mybatisplus.core.conditions.Wrapper.class))).thenReturn(List.of());
 
         var result = controller.caseStats();
 
