@@ -211,7 +211,6 @@ class DerivationTaskServiceTest {
 
     @Test
     void getTask_内存未命中_DB命中_从DB重构() {
-        when(quotaMapper.selectOne(any())).thenReturn(null);
         Derivation dbRecord = new Derivation();
         dbRecord.setId(5001L);
         dbRecord.setStatus("success");

@@ -2,11 +2,13 @@ package com.eaiselp.runtime.casestate;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfo;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.eaiselp.data.entity.Case;
 import com.eaiselp.data.service.CaseService;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -20,6 +22,11 @@ import static org.mockito.Mockito.*;
  *
  * <p>核心验证：合法流转、非法流转拦截、幂等流转、caseId 空值校验、
  * Case 不存在异常、终态保护（done 不可流转）。</p>
+ *
+ * <p><b>lambda cache 初始化</b>：CaseStateServiceImpl 内部用 LambdaQueryWrapper<Case>
+ * 构造查询条件（Case::getCaseId），MyBatis-Plus 解析 lambda 方法引用需要 entity 的
+ * TableInfo 缓存。纯 Mockito（无 Spring 上下文）下 cache 为空会抛 MybatisPlusException。
+ * 这里用 @BeforeAll 手动初始化 Case 的 TableInfo。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class CaseStateServiceImplTest {
@@ -28,6 +35,16 @@ class CaseStateServiceImplTest {
 
     @InjectMocks
     CaseStateServiceImpl caseStateService;
+
+    @BeforeAll
+    static void initLambdaCache() {
+        // 初始化 MyBatis-Plus lambda cache（纯 Mockito 下无 Spring 自动初始化）
+        // LambdaQueryWrapper<Case> 构造时 Case::getCaseId 需要 entity 的 TableInfo 缓存
+        org.apache.ibatis.session.Configuration cfg = new com.baomidou.mybatisplus.core.MybatisConfiguration();
+        org.apache.ibatis.builder.MapperBuilderAssistant assistant =
+                new org.apache.ibatis.builder.MapperBuilderAssistant(cfg, "");
+        TableInfoHelper.initTableInfo(assistant, Case.class);
+    }
 
     // ===== 合法流转 =====
 

@@ -210,7 +210,7 @@ class UserControllerTest {
     @Test
     void assignRoles_用户不存在_返回404() {
         loginAs(1L);
-        when(userService.assignRoles(1L, 999L, any())).thenReturn(false);
+        when(userService.assignRoles(eq(1L), eq(999L), any())).thenReturn(false);
 
         UserController.AssignRolesRequest req = new UserController.AssignRolesRequest();
         req.setRoleCodes(List.of());
