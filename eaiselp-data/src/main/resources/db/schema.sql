@@ -424,6 +424,9 @@ CREATE TABLE `t_model_routing` (
   `role_hint` VARCHAR(256) DEFAULT NULL COMMENT '推荐角色（如 reasoning 档推荐 EA/SE 用 deepseek-r1）',
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `create_by` VARCHAR(64) DEFAULT NULL,
+  `update_by` VARCHAR(64) DEFAULT NULL,
+  `is_deleted` TINYINT NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_tier_provider_model` (`tier`, `provider`, `model`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='模型路由表（系统级，P8 解耦层）';
