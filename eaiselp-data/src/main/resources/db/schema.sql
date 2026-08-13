@@ -253,7 +253,7 @@ CREATE TABLE `t_role` (
   `role_name` VARCHAR(128) NOT NULL,
   `role_type` VARCHAR(16) NOT NULL DEFAULT 'system_template',
   `data_scope` VARCHAR(16) NOT NULL DEFAULT 'tenant',
-  `is_builtin` TINYINT NOT NULL DEFAULT 1,
+  `is_built_in` TINYINT NOT NULL DEFAULT 1,
   `description` VARCHAR(500) DEFAULT NULL,
   `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -350,7 +350,7 @@ INSERT IGNORE INTO `t_permission` (`id`, `tenant_id`, `permission_code`, `permis
 (1031, 0, 'quota:edit',            '配额编辑',       'quota',    'quota',   'edit',   NULL);
 
 -- 5 模板角色（tenant_id=0 系统级预置，所有租户共享；data_scope 决定分配后的数据可见范围）
-INSERT IGNORE INTO `t_role` (`id`, `tenant_id`, `role_code`, `role_name`, `role_type`, `data_scope`, `is_builtin`, `description`) VALUES
+INSERT IGNORE INTO `t_role` (`id`, `tenant_id`, `role_code`, `role_name`, `role_type`, `data_scope`, `is_built_in`, `description`) VALUES
 (1, 0, 'platform_admin',   '平台管理员', 'system_template', 'all',     1, '平台全局管理员，data_scope=all 跨租户'),
 (2, 0, 'tenant_admin',     '企业管理员', 'system_template', 'tenant',  1, '租户管理员，data_scope=tenant 限本租户'),
 (3, 0, 'project_manager',  '项目经理',   'system_template', 'tenant',  1, '项目经理，管项目群与 Case'),

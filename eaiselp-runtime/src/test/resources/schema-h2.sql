@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS t_model_routing (
   role_hint VARCHAR(256),
   create_time TIMESTAMP,
   update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
   is_deleted INT DEFAULT 0
 );
 MERGE INTO t_model_routing (id, tier, provider, model, priority, enabled) KEY(id) VALUES

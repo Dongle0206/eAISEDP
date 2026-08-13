@@ -10,6 +10,9 @@ server:
 spring:
   application:
     name: eaiselp-runtime
+  mvc:
+    servlet:
+      load-on-startup: 1
   datasource:                                                   # M1.2 新增：data 模块需要
     url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/eaiselp?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: ${MYSQL_USER:root}

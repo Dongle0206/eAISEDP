@@ -3,6 +3,9 @@ server:
 spring:
   application:
     name: eaiselp-auth
+  mvc:
+    servlet:
+      load-on-startup: 1
   datasource:                                                   # M2 Phase 1 新增：auth 独立查 t_user/t_user_role
     url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/eaiselp?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
     username: ${MYSQL_USER:root}
