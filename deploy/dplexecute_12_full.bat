@@ -21,7 +21,9 @@ echo.
 REM ============ 配置区（按实际环境修改）============
 set "PLATFORM_DIR=D:\eaiselp\platform"
 set "WEB_DIR=D:\eaiselp\web"
-set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
+REM JAVA_HOME 留空则自动探测（见下方 JDK 探测逻辑），也可手动指定：
+REM set "JAVA_HOME=D:\your\jdk17\path"
+set "JAVA_HOME="
 set "MYSQL_CONTAINER=eaiselp-mysql"
 set "MYSQL_ROOT_PWD=root"
 set "GLM_API_KEY="
@@ -31,6 +33,65 @@ REM =================================================
 
 REM JWT_SECRET 固定值（开发环境，生产必须改）
 set "JWT_SECRET=dev-placeholder-secret-must-be-at-least-32-bytes-long-for-hs256-algorithm"
+
+REM ============ JDK17 自动探测 ============
+REM 如果用户没手动设置 JAVA_HOME，自动在常见路径中查找 JDK17
+if "%JAVA_HOME%"=="" (
+    echo [JDK] 自动探测 JDK17...
+    REM 1. 检查系统环境变量 JAVA_HOME 是否已指向 17
+    if not "%SystemDrive%"=="" (
+        for /f "delims=" %%v in ('java -version 2^>^&1 ^| findstr /i "version"') do set JAVA_VER=%%v
+    )
+    REM 2. 扫描常见安装路径
+    set "JDK_FOUND="
+    for %%d in (
+        "C:\Program Files\Eclipse Adoptium"
+        "C:\Program Files\Java"
+        "C:\Program Files\Microsoft"
+        "C:\Program Files\Zulu"
+        "C:\Program Files\BellSoft"
+        "D:\jdk"
+        "D:\Java"
+    ) do (
+        if exist %%d (
+            for /d %%j in (%%d\jdk-17*) do (
+                if exist "%%j\bin\java.exe" (
+                    set "JAVA_HOME=%%j"
+                    set "JDK_FOUND=1"
+                )
+            )
+            if not defined JDK_FOUND (
+                for /d %%j in (%%d\jdk*) do (
+                    if exist "%%j\bin\java.exe" (
+                        REM 检查是否是 17
+                        "%%j\bin\java.exe" -version 2>&1 | findstr "17." >nul && (
+                            set "JAVA_HOME=%%j"
+                            set "JDK_FOUND=1"
+                        )
+                    )
+                )
+            )
+        )
+    )
+    if defined JDK_FOUND (
+        echo [JDK] 找到: !JAVA_HOME!
+    ) else (
+        echo [JDK] × 未找到 JDK17！请手动设置 JAVA_HOME 后重试。
+        echo   方法1: set "JAVA_HOME=你的JDK17路径" 然后重新运行本脚本
+        echo   方法2: 编辑本脚本配置区的 JAVA_HOME 变量
+        echo   下载: winget install EclipseAdoptium.Temurin.17.JDK
+        pause
+        exit /b 1
+    )
+)
+REM 验证 JDK17 确实可用
+"%JAVA_HOME%\bin\java.exe" -version 2>&1 | findstr "17." >nul
+if errorlevel 1 (
+    echo [JDK] × JAVA_HOME 指向的不是 JDK17: %JAVA_HOME%
+    echo   请检查路径或重新安装 JDK17
+    pause
+    exit /b 1
+)
 
 echo [配置] 后端目录: %PLATFORM_DIR%
 echo [配置] 前端目录: %WEB_DIR%
