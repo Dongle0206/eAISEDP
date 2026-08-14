@@ -29,6 +29,9 @@ public class OrchestrationState {
     /** 流水线步骤列表 */
     private List<StepResult> steps = new ArrayList<>();
 
+    /** 产出验证结果（编排完成后自动运行 CodeValidationService） */
+    private CodeValidationSummary validation;
+
     private LocalDateTime createdAt;
     private LocalDateTime finishedAt;
 
@@ -40,6 +43,16 @@ public class OrchestrationState {
     /** 已完成步骤数（success + failed） */
     public int completedSteps() {
         return (int) steps.stream().filter(s -> "success".equals(s.status) || "failed".equals(s.status)).count();
+    }
+
+    /** 产出验证摘要（详细逐文件结果在 checks 里）。 */
+    @Data
+    public static class CodeValidationSummary {
+        private boolean allPassed;
+        private int totalFiles;
+        private int passedFiles;
+        private int failedFiles;
+        private String validatedAt;
     }
 
     @Data

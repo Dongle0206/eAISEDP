@@ -11,6 +11,7 @@ import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.orchestration.OrchestrationService;
 import com.eaiselp.runtime.orchestration.OrchestrationState;
 import com.eaiselp.runtime.workspace.ArtifactFileService;
+import com.eaiselp.runtime.workspace.CodeValidationService;
 import com.eaiselp.runtime.workspace.GitService;
 import com.eaiselp.runtime.task.DerivationAsyncRunner;
 import com.eaiselp.runtime.task.DerivationTaskService;
@@ -58,6 +59,7 @@ public class RuntimeController {
     private final OrchestrationService orchestrationService;
     private final ArtifactFileService artifactFileService;
     private final GitService gitService;
+    private final CodeValidationService codeValidationService;
 
     /**
      * 手动派生单角色（M2-DFX 异步化：立即返回 taskId）。
@@ -222,6 +224,48 @@ public class RuntimeController {
             return R.ok(java.nio.file.Files.readString(filePath));
         } catch (Exception e) {
             return R.fail(500, "读取失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 验证 Case 工作区的代码文件（核心价值闭环 #1）。
+     *
+     * <p>对 HTML/JS/Python/Java/CSS 做分层验证：
+     * 优先用真实工具（node --check / python py_compile），降级为结构检查。
+     * 返回逐文件的验证结果（通过/失败 + 具体原因）。</p>
+     */
+    @PostMapping("/workspace/{caseId}/validate")
+    public R<CodeValidationService.ValidationResult> validateWorkspace(@PathVariable String caseId) {
+        return R.ok(codeValidationService.validateWorkspace(caseId));
+    }
+
+    /**
+     * 预览工作区 HTML 产出（产出在线预览 #3）。
+     *
+     * <p>返回 HTML 文件内容，Content-Type=text/html，
+     * 前端直接 iframe 渲染——客户能"看一眼 AI 生成的网页长什么样"。</p>
+     */
+    @GetMapping(value = "/workspace/{caseId}/preview", produces = "text/html; charset=utf-8")
+    public org.springframework.http.ResponseEntity<String> previewHtml(
+            @PathVariable String caseId, @RequestParam String path) {
+        try {
+            java.nio.file.Path filePath = java.nio.file.Paths.get(
+                    System.getProperty("user.dir"), "workspaces", caseId, path).normalize();
+            java.nio.file.Path baseDir = java.nio.file.Paths.get(
+                    System.getProperty("user.dir"), "workspaces", caseId).normalize();
+            if (!filePath.startsWith(baseDir)) {
+                return org.springframework.http.ResponseEntity.badRequest().body("路径越权");
+            }
+            if (!java.nio.file.Files.exists(filePath)) {
+                return org.springframework.http.ResponseEntity.notFound().build();
+            }
+            String content = java.nio.file.Files.readString(filePath);
+            return org.springframework.http.ResponseEntity.ok()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .body(content);
+        } catch (Exception e) {
+            return org.springframework.http.ResponseEntity.internalServerError()
+                    .body("预览失败: " + e.getMessage());
         }
     }
 

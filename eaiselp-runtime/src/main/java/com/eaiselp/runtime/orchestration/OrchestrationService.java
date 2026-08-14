@@ -7,6 +7,7 @@ import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.workspace.ArtifactFileService;
 import com.eaiselp.runtime.workspace.CICDTriggerService;
+import com.eaiselp.runtime.workspace.CodeValidationService;
 import com.eaiselp.runtime.workspace.GitService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +51,7 @@ public class OrchestrationService {
     private final ArtifactFileService artifactFileService;
     private final GitService gitService;
     private final CICDTriggerService cicdTriggerService;
+    private final CodeValidationService codeValidationService;
 
     @Value("${eaiselp.orchestration.step-interval-ms:3000}")
     private long stepIntervalMs;
@@ -222,6 +224,22 @@ public class OrchestrationService {
         // ★ Git 落地：编排完成后，把工作区 commit + push
         if (success > 0) {
             try {
+                // ★ 产出验证（核心价值闭环：AI 产出必须验证，结果记录到编排状态供前端展示）
+                try {
+                    var vr = codeValidationService.validateWorkspace(state.getCaseId());
+                    OrchestrationState.CodeValidationSummary summary = new OrchestrationState.CodeValidationSummary();
+                    summary.setAllPassed(vr.isAllPassed());
+                    summary.setTotalFiles(vr.getTotalFiles());
+                    summary.setPassedFiles(vr.getPassedFiles());
+                    summary.setFailedFiles(vr.getFailedFiles());
+                    summary.setValidatedAt(vr.getValidatedAt());
+                    state.setValidation(summary);
+                    log.info("[Orchestration] 产出验证: {}/{} 通过, 全部通过={}",
+                            vr.getPassedFiles(), vr.getTotalFiles(), vr.isAllPassed());
+                } catch (Exception ve) {
+                    log.warn("[Orchestration] 产出验证失败（不阻塞）", ve);
+                }
+
                 String commitMsg = "eAISEDP 编排产出: " + state.getCaseId()
                         + " (成功" + success + "/" + state.totalSteps() + ")";
                 String commitHash = gitService.commitWorkspace(state.getCaseId(), commitMsg);
