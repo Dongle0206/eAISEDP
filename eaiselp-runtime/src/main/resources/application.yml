@@ -38,6 +38,15 @@ mybatis-plus:                                                    # M1.2 新增�
       logic-delete-value: 1
       logic-not-delete-value: 0
 eaiselp:
+  workspace:                                                                   # 产出落地链路：AI 产出 → 文件系统 → Git
+    root: ${WORKSPACE_ROOT:./workspaces}                                       # 工作区根目录（每个 Case 一个子目录）
+  git:                                                                         # Git 落地（编排完成后自动 commit + push）
+    remote-url: ${GIT_REMOTE_URL:}                                             # 远程仓库 URL（空则只 commit 不 push）
+    token: ${GIT_TOKEN:}                                                       # 访问 token（Personal Access Token）
+    author-name: eAISEDP-Bot
+    author-email: bot@eaiselp.com
+  orchestration:                                                               # 编排模式配置
+    step-interval-ms: 3000                                                     # 步骤间间隔（防 LLM 429 限流）
   artifact:                                                                    # SP-4：产物类型映射（清除 P6 硬编码，新增角色只改 yml 不动 Java）
     default-type: other                                                        # 未匹配时的兜底类型
     type-mapping:                                                              # 角色名(agent.name) → 产物类型

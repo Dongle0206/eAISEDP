@@ -5,6 +5,8 @@ import com.eaiselp.capability.loader.CapabilityLoader;
 import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
+import com.eaiselp.runtime.workspace.ArtifactFileService;
+import com.eaiselp.runtime.workspace.GitService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,6 +46,8 @@ public class OrchestrationService {
 
     private final DerivationEngine engine;
     private final CapabilityLoader capabilityLoader;
+    private final ArtifactFileService artifactFileService;
+    private final GitService gitService;
 
     @Value("${eaiselp.orchestration.step-interval-ms:3000}")
     private long stepIntervalMs;
@@ -160,6 +164,17 @@ public class OrchestrationService {
                 stepResult.setFinishedAt(LocalDateTime.now());
                 log.info("[Orchestration] 步骤 {}/{} 完成: role={}", i + 1, pipeline.length, role);
 
+                // ★ 产出落地：把 LLM 产出写入工作区文件系统
+                if (result != null && result.getOutput() != null) {
+                    try {
+                        var written = artifactFileService.writeToWorkspace(
+                                state.getCaseId(), role, result.getOutput());
+                        log.info("[Orchestration] 产出落地: role={}, 文件数={}", role, written.size());
+                    } catch (Exception fe) {
+                        log.warn("[Orchestration] 产出落地失败（不阻塞流程）: role={}", role, fe);
+                    }
+                }
+
                 // 步骤间间隔（防 LLM 429 限流）
                 if (i < pipeline.length - 1 && stepIntervalMs > 0) {
                     Thread.sleep(stepIntervalMs);
@@ -201,6 +216,22 @@ public class OrchestrationService {
         int success = (int) state.getSteps().stream().filter(s -> "success".equals(s.getStatus())).count();
         int failed = (int) state.getSteps().stream().filter(s -> "failed".equals(s.getStatus())).count();
         log.info("[Orchestration] 编排完成 id={}, 成功={}, 失败={}", id, success, failed);
+
+        // ★ Git 落地：编排完成后，把工作区 commit + push
+        if (success > 0) {
+            try {
+                String commitMsg = "eAISEDP 编排产出: " + state.getCaseId()
+                        + " (成功" + success + "/" + state.totalSteps() + ")";
+                String commitHash = gitService.commitWorkspace(state.getCaseId(), commitMsg);
+                if (commitHash != null) {
+                    log.info("[Orchestration] Git commit 成功: {} → {}", state.getCaseId(), commitHash.substring(0, 8));
+                    // 远程推送（配置了远程地址才 push）
+                    gitService.pushWorkspace(state.getCaseId());
+                }
+            } catch (Exception ge) {
+                log.warn("[Orchestration] Git 落地失败（不阻塞流程）", ge);
+            }
+        }
     }
 
     /** 查询编排进度。 */

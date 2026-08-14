@@ -24,6 +24,8 @@
         <dependency><groupId>com.eaiselp</groupId><artifactId>eaiselp-data</artifactId><version>${project.version}</version></dependency>
         <!-- M3-3 新增：用户管理 CRUD 需 BCrypt 加密密码（仅 crypto，不引完整 spring-security，与 JWT 无状态冲突）-->
         <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-crypto</artifactId></dependency>
+        <!-- 产出落地链路：JGit（真实 git init/commit/push，不依赖系统 git 命令） -->
+        <dependency><groupId>org.eclipse.jgit</groupId><artifactId>org.eclipse.jgit</artifactId><version>6.9.0.202403050737-r</version></dependency>
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>

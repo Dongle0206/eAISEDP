@@ -10,6 +10,8 @@ import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.orchestration.OrchestrationService;
 import com.eaiselp.runtime.orchestration.OrchestrationState;
+import com.eaiselp.runtime.workspace.ArtifactFileService;
+import com.eaiselp.runtime.workspace.GitService;
 import com.eaiselp.runtime.task.DerivationAsyncRunner;
 import com.eaiselp.runtime.task.DerivationTaskService;
 import com.eaiselp.runtime.task.DerivationTaskState;
@@ -19,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -53,6 +56,8 @@ public class RuntimeController {
     private final DerivationTaskService taskService;
     private final AuditService auditService;
     private final OrchestrationService orchestrationService;
+    private final ArtifactFileService artifactFileService;
+    private final GitService gitService;
 
     /**
      * 手动派生单角色（M2-DFX 异步化：立即返回 taskId）。
@@ -169,6 +174,55 @@ public class RuntimeController {
             return R.ok(notFound);
         }
         return R.ok(state);
+    }
+
+    // ======================== 工作区文件浏览（产出落地） ========================
+
+    /**
+     * 列出 Case 工作区的文件树（编排产出落地的文件）。
+     *
+     * <p>编排完成后，AI 产出自动写入工作区目录并 Git commit。
+     * 本接口返回文件列表，前端可查看已落地的代码文件。</p>
+     */
+    @GetMapping("/workspace/{caseId}/files")
+    public R<Map<String, Object>> listWorkspaceFiles(@PathVariable String caseId) {
+        if (!artifactFileService.exists(caseId)) {
+            return R.ok(Map.of("exists", false, "files", List.of()));
+        }
+        var files = artifactFileService.listFiles(caseId);
+        return R.ok(Map.of(
+                "exists", true,
+                "files", files,
+                "fileCount", files.size(),
+                "gitCommitted", gitService.isRemoteConfigured()
+        ));
+    }
+
+    /**
+     * 读取工作区中的单个文件内容。
+     */
+    @GetMapping("/workspace/{caseId}/read")
+    public R<String> readWorkspaceFile(@PathVariable String caseId,
+                                       @RequestParam String path) {
+        if (!artifactFileService.exists(caseId)) {
+            return R.fail(404, "工作区不存在: " + caseId);
+        }
+        try {
+            java.nio.file.Path filePath = java.nio.file.Paths.get(
+                    System.getProperty("user.dir"), "workspaces", caseId, path).normalize();
+            // 路径安全检查
+            java.nio.file.Path baseDir = java.nio.file.Paths.get(
+                    System.getProperty("user.dir"), "workspaces", caseId).normalize();
+            if (!filePath.startsWith(baseDir)) {
+                return R.fail(403, "路径越权");
+            }
+            if (!java.nio.file.Files.exists(filePath)) {
+                return R.fail(404, "文件不存在: " + path);
+            }
+            return R.ok(java.nio.file.Files.readString(filePath));
+        } catch (Exception e) {
+            return R.fail(500, "读取失败: " + e.getMessage());
+        }
     }
 
     /** 转义 JSON 字符串（审计 detail 防注入）。 */
