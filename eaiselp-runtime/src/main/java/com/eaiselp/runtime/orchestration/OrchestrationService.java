@@ -6,6 +6,7 @@ import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.workspace.ArtifactFileService;
+import com.eaiselp.runtime.workspace.CICDTriggerService;
 import com.eaiselp.runtime.workspace.GitService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,6 +49,7 @@ public class OrchestrationService {
     private final CapabilityLoader capabilityLoader;
     private final ArtifactFileService artifactFileService;
     private final GitService gitService;
+    private final CICDTriggerService cicdTriggerService;
 
     @Value("${eaiselp.orchestration.step-interval-ms:3000}")
     private long stepIntervalMs;
@@ -227,6 +229,9 @@ public class OrchestrationService {
                     log.info("[Orchestration] Git commit 成功: {} → {}", state.getCaseId(), commitHash.substring(0, 8));
                     // 远程推送（配置了远程地址才 push）
                     gitService.pushWorkspace(state.getCaseId());
+                    // CI/CD 触发（配置了 Webhook URL 才触发，适配 Jenkins/GitLab/GitHub/Gitea 等）
+                    var files = artifactFileService.listFiles(state.getCaseId());
+                    cicdTriggerService.triggerBuild(state.getCaseId(), commitHash, files, state.getRequirement());
                 }
             } catch (Exception ge) {
                 log.warn("[Orchestration] Git 落地失败（不阻塞流程）", ge);

@@ -45,6 +45,10 @@ eaiselp:
     token: ${GIT_TOKEN:}                                                       # 访问 token（Personal Access Token）
     author-name: eAISEDP-Bot
     author-email: bot@eaiselp.com
+  cicd:                                                                         # CI/CD 触发（灵活适配 Jenkins/GitLab/GitHub/Gitea/Drone 等通过 Webhook）
+    webhook-url: ${CICD_WEBHOOK_URL:}                                           # CI/CD 工具的 Webhook 接收地址（空=不触发，Git push 后 CI/CD 可自动感知）
+    webhook-token: ${CICD_WEBHOOK_TOKEN:}                                       # Webhook 认证 token（Bearer + 自定义 Header 双发，兼容各工具）
+    timeout-ms: 10000                                                           # 触发请求超时
   orchestration:                                                               # 编排模式配置
     step-interval-ms: 3000                                                     # 步骤间间隔（防 LLM 429 限流）
   artifact:                                                                    # SP-4：产物类型映射（清除 P6 硬编码，新增角色只改 yml 不动 Java）
