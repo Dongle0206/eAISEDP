@@ -8,6 +8,8 @@ import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
+import com.eaiselp.runtime.orchestration.OrchestrationService;
+import com.eaiselp.runtime.orchestration.OrchestrationState;
 import com.eaiselp.runtime.task.DerivationAsyncRunner;
 import com.eaiselp.runtime.task.DerivationTaskService;
 import com.eaiselp.runtime.task.DerivationTaskState;
@@ -50,6 +52,7 @@ public class RuntimeController {
     private final DerivationAsyncRunner asyncRunner;
     private final DerivationTaskService taskService;
     private final AuditService auditService;
+    private final OrchestrationService orchestrationService;
 
     /**
      * 手动派生单角色（M2-DFX 异步化：立即返回 taskId）。
@@ -121,5 +124,67 @@ public class RuntimeController {
         private String task;
         private String caseId;
         private String stage;
+    }
+
+    // ======================== 编排模式 ========================
+
+    /**
+     * 一键编排：一句话需求 → 自动按流水线派生所有角色（PO→SE→Dev→Reviewer→QA→Ops）。
+     *
+     * <p>用户只需输入需求，平台自动串行派生 6 个角色，每步把前面步骤的产出传给下一步。
+     * 立即返回编排 ID，前端轮询 {@code GET /orchestrate/{id}} 查看流水线进度。
+     */
+    @PostMapping("/orchestrate")
+    @RateLimit(name = "orchestrate", key = RateLimit.KeyType.TENANT,
+            capacity = 3, refillPerMin = 3,
+            message = "编排请求过于频繁，请稍后再试")
+    public ResponseEntity<R<Map<String, Object>>> orchestrate(@RequestBody OrchestrateRequest req) {
+        if (req.getRequirement() == null || req.getRequirement().isBlank()) {
+            return ResponseEntity.ok(R.fail("requirement（需求）不能为空"));
+        }
+        Long tenantId = TenantContext.get();
+        Long orchId = orchestrationService.start(req.getRequirement(), req.getCaseId(), req.getTier());
+        auditService.log("orchestrate_start", "case", req.getCaseId(),
+                "{\"requirement\":\"" + safeJson(req.getRequirement()) + "\",\"orchestrationId\":" + orchId + "}");
+        // 异步执行流水线
+        orchestrationService.runAsync(orchId, tenantId);
+        return ResponseEntity.accepted().body(R.ok(Map.of(
+                "orchestrationId", orchId, "status", "pending")));
+    }
+
+    /**
+     * 查询编排进度（前端轮询用）。
+     *
+     * <p>返回流水线步骤列表，每步含角色/状态/产出类型。status: pending/running/done/failed。</p>
+     */
+    @GetMapping("/orchestrate/{id}")
+    @RateLimit(name = "orchestrate-get", key = RateLimit.KeyType.USER,
+            capacity = 60, refillPerMin = 60,
+            message = "查询请求过于频繁，请稍后再试")
+    public R<OrchestrationState> getOrchestration(@PathVariable Long id) {
+        OrchestrationState state = orchestrationService.getState(id);
+        if (state == null) {
+            OrchestrationState notFound = new OrchestrationState();
+            notFound.setStatus("not_found");
+            return R.ok(notFound);
+        }
+        return R.ok(state);
+    }
+
+    /** 转义 JSON 字符串（审计 detail 防注入）。 */
+    private String safeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    @Data
+    public static class OrchestrateRequest {
+        /** 一句话需求（必填） */
+        private String requirement;
+        /** 关联 Case ID */
+        private String caseId;
+        /** 模式：fast（默认，6步）/ standard（预留） */
+        private String tier;
     }
 }

@@ -62,4 +62,28 @@ public class AsyncConfig {
                 corePoolSize, maxPoolSize, queueCapacity);
         return ex;
     }
+
+    /**
+     * 编排专用线程池（编排模式：一句话需求 → 自动 6 步流水线）。
+     *
+     * <p>编排是长耗时任务（6 步 × 每步 10-60s = 1-6 分钟），且步骤间有数据依赖只能串行。
+     * 独立线程池避免编排占用 runtimeLlmExecutor 线程导致单角色派生被饿死。</p>
+     *
+     * <p>core=2：同时最多 2 条编排流水线并行；
+     * max=3：突发允许 3 条；queue=10：缓冲。</p>
+     */
+    @Bean("orchestrationExecutor")
+    public ThreadPoolTaskExecutor orchestrationExecutor() {
+        ThreadPoolTaskExecutor ex = new ThreadPoolTaskExecutor();
+        ex.setCorePoolSize(2);
+        ex.setMaxPoolSize(3);
+        ex.setQueueCapacity(10);
+        ex.setThreadNamePrefix("orchestration-");
+        ex.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+        ex.setWaitForTasksToCompleteOnShutdown(true);
+        ex.setAwaitTerminationSeconds(600);  // 编排最长 10 分钟，给足收尾时间
+        ex.initialize();
+        log.info("[AsyncConfig] orchestrationExecutor 初始化: core=2, max=3, queue=10");
+        return ex;
+    }
 }
