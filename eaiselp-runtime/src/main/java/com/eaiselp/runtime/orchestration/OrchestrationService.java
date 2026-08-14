@@ -9,6 +9,8 @@ import com.eaiselp.runtime.workspace.ArtifactFileService;
 import com.eaiselp.runtime.workspace.CICDTriggerService;
 import com.eaiselp.runtime.workspace.CodeValidationService;
 import com.eaiselp.runtime.workspace.GitService;
+import com.eaiselp.data.entity.Checkpoint;
+import com.eaiselp.data.service.CheckpointService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -52,6 +54,11 @@ public class OrchestrationService {
     private final GitService gitService;
     private final CICDTriggerService cicdTriggerService;
     private final CodeValidationService codeValidationService;
+    private final CheckpointService checkpointService;
+
+    /** 不可逆操作（部署）前的检查点等待超时：30 分钟 */
+    @Value("${eaiselp.orchestration.approval-timeout-ms:1800000}")
+    private long approvalTimeoutMs;
 
     @Value("${eaiselp.orchestration.step-interval-ms:3000}")
     private long stepIntervalMs;
@@ -134,6 +141,23 @@ public class OrchestrationService {
             stepResult.setStartedAt(LocalDateTime.now());
 
             try {
+                // ★ 检查点人工锁（可靠性治理：不可逆操作前必须人工确认）
+                // 部署类步骤（team-ops）执行前暂停，等待检查点审批
+                if ("team-ops".equals(role)) {
+                    ApprovalDecision decision = awaitApproval(state, stepResult);
+                    if (decision == ApprovalDecision.REJECTED || decision == ApprovalDecision.TIMEOUT) {
+                        // 拒绝/超时 → 跳过部署步骤，编排继续收尾（其他步骤成果保留）
+                        stepResult.setStatus("skipped");
+                        stepResult.setError(decision == ApprovalDecision.REJECTED
+                                ? "检查点被拒绝，跳过部署" : "审批超时（30分钟），跳过部署");
+                        stepResult.setFinishedAt(LocalDateTime.now());
+                        state.setCurrentRole(null);
+                        log.warn("[Orchestration] 部署步骤被跳过 id={}, 原因={}", id, decision);
+                        continue; // 跳过本步骤（team-ops 是最后一步，直接进收尾）
+                    }
+                    // approved → 继续执行部署
+                }
+
                 // 获取角色定义
                 AgentDefinition agent = capabilityLoader.getAgent(role);
                 if (agent == null) {
@@ -260,5 +284,75 @@ public class OrchestrationService {
     /** 查询编排进度。 */
     public OrchestrationState getState(Long id) {
         return stateMap.get(id);
+    }
+
+    /** 审批决定。 */
+    enum ApprovalDecision { APPROVED, REJECTED, TIMEOUT }
+
+    /**
+     * 创建检查点并等待人工审批（可靠性治理：不可逆操作人工锁）。
+     *
+     * <p>编排状态转为 {@code awaiting_approval}，前端轮询可见并提示去检查点审批页操作。
+     * 每 5 秒轮询检查点状态，最长等 {@code approval-timeout-ms}（默认 30 分钟）。</p>
+     *
+     * <p><b>实现权衡</b>：当前用线程阻塞等待（占编排线程），MVP 可接受
+     * （orchestrationExecutor core=2）。生产版应改为"暂停/恢复"模式
+     * （编排状态落库 + 审批回调触发继续），配合编排持久化一起做。</p>
+     */
+    private ApprovalDecision awaitApproval(OrchestrationState state, OrchestrationState.StepResult stepResult) {
+        try {
+            // 1. 创建 pending 检查点
+            Checkpoint cp = checkpointService.create(
+                    state.getCaseId(), "orchestration_deploy_" + state.getId(), null);
+
+            // 2. 编排状态 → awaiting_approval（前端可见）
+            state.setStatus("awaiting_approval");
+            state.setPendingCheckpointId(cp.getId());
+            state.setApprovalMessage("部署为不可逆操作，等待人工审批（检查点 #" + cp.getId()
+                    + "）。请到「检查点审批」页面确认或拒绝。30 分钟无审批自动跳过。");
+            log.info("[Orchestration] 等待部署审批 id={}, checkpointId={}", state.getId(), cp.getId());
+
+            // 3. 轮询等待（5 秒一次）
+            long deadline = System.currentTimeMillis() + approvalTimeoutMs;
+            while (System.currentTimeMillis() < deadline) {
+                Thread.sleep(5000);
+                Checkpoint cur = checkpointService.getById(cp.getId());
+                if (cur == null) continue;
+                String st = cur.getStatus();
+                if (CheckpointService.STATUS_CONFIRMED.equals(st)) {
+                    // 审批通过 → 恢复运行
+                    state.setStatus("running");
+                    state.setPendingCheckpointId(null);
+                    state.setApprovalMessage(null);
+                    log.info("[Orchestration] 部署审批通过 id={}", state.getId());
+                    return ApprovalDecision.APPROVED;
+                }
+                if (CheckpointService.STATUS_REJECTED.equals(st)) {
+                    state.setPendingCheckpointId(null);
+                    state.setApprovalMessage(null);
+                    log.info("[Orchestration] 部署审批被拒 id={}", state.getId());
+                    return ApprovalDecision.REJECTED;
+                }
+                // 仍 pending → 继续等
+            }
+            // 超时
+            state.setPendingCheckpointId(null);
+            state.setApprovalMessage(null);
+            log.warn("[Orchestration] 部署审批超时 id={}", state.getId());
+            return ApprovalDecision.TIMEOUT;
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            state.setPendingCheckpointId(null);
+            state.setApprovalMessage(null);
+            return ApprovalDecision.TIMEOUT;
+        } catch (Exception e) {
+            // 检查点服务异常：降级放行（不能因审批基础设施故障卡死编排）并 log 告警
+            log.error("[Orchestration] 检查点服务异常，降级放行部署 id={}", state.getId(), e);
+            state.setStatus("running");
+            state.setPendingCheckpointId(null);
+            state.setApprovalMessage(null);
+            return ApprovalDecision.APPROVED;
+        }
     }
 }

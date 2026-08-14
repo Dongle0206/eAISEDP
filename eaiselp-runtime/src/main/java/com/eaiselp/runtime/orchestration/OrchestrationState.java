@@ -20,11 +20,17 @@ public class OrchestrationState {
     private String requirement;
     private String tier;
 
-    /** pending / running / done / failed */
+    /** pending / running / awaiting_approval / done / failed */
     private String status;
 
     /** 当前执行步骤的角色名 */
     private String currentRole;
+
+    /** 等待审批的检查点 ID（status=awaiting_approval 时非空） */
+    private Long pendingCheckpointId;
+
+    /** 等待审批的提示信息 */
+    private String approvalMessage;
 
     /** 流水线步骤列表 */
     private List<StepResult> steps = new ArrayList<>();
@@ -65,7 +71,7 @@ public class OrchestrationState {
         private String roleLabel;
         /** 产物类型（prd/code/review/test/deploy 等） */
         private String artifactType;
-        /** pending / running / success / failed */
+        /** pending / running / success / failed / skipped（检查点被拒时跳过） */
         private String status;
         /** 失败原因 */
         private String error;
