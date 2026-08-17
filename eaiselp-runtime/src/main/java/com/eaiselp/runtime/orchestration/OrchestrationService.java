@@ -2,6 +2,8 @@ package com.eaiselp.runtime.orchestration;
 
 import com.eaiselp.capability.model.AgentDefinition;
 import com.eaiselp.capability.loader.CapabilityLoader;
+import com.eaiselp.adapter.spi.AdapterFactory;
+import com.eaiselp.adapter.spi.LlmAdapter;
 import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
@@ -50,6 +52,7 @@ public class OrchestrationService {
 
     private final DerivationEngine engine;
     private final CapabilityLoader capabilityLoader;
+    private final AdapterFactory adapterFactory;
     private final ArtifactFileService artifactFileService;
     private final GitService gitService;
     private final CICDTriggerService cicdTriggerService;
@@ -96,7 +99,7 @@ public class OrchestrationService {
         state.setStatus("pending");
         state.setCreatedAt(LocalDateTime.now());
 
-        // 初始化步骤列表
+        // 初始化步骤列表（默认 fast 预填；runAsync 时 LLM 智能规划可能替换）
         String[][] pipeline = FAST_PIPELINE;
         for (int i = 0; i < pipeline.length; i++) {
             state.getSteps().add(OrchestrationState.StepResult.pending(
@@ -128,14 +131,22 @@ public class OrchestrationService {
 
         log.info("[Orchestration] 开始执行编排 id={}, requirement={}", id, state.getRequirement());
 
-        String[][] pipeline = FAST_PIPELINE;
-        for (int i = 0; i < pipeline.length; i++) {
-            String[] step = pipeline[i];
-            String role = step[0];
-            String roleLabel = step[1];
-            String artifactType = step[2];
+        // ★ 智能规划（#2 编排智能化）：用 team-orchestrator LLM 分析需求动态生成流水线
+        // 规划失败降级为默认 fast 流水线（start 时已预填）
+        boolean planned = planPipelineWithLlm(state);
+        List<OrchestrationState.StepResult> steps = state.getSteps();
+        int total = steps.size();
+        if (planned) {
+            log.info("[Orchestration] 智能规划成功 id={}, 步骤数={}", id, total);
+        } else {
+            log.info("[Orchestration] 智能规划降级为默认 fast 流水线 id={}", id);
+        }
 
-            OrchestrationState.StepResult stepResult = state.getSteps().get(i);
+        for (int i = 0; i < total; i++) {
+            OrchestrationState.StepResult stepResult = steps.get(i);
+            String role = stepResult.getRole();
+            String roleLabel = stepResult.getRoleLabel();
+            String artifactType = stepResult.getArtifactType();
             state.setCurrentRole(role);
             stepResult.setStatus("running");
             stepResult.setStartedAt(LocalDateTime.now());
@@ -165,15 +176,18 @@ public class OrchestrationService {
                 }
 
                 // 构建上下文：把前面所有步骤的产出传给当前步骤
+                // 指令优先用编排者 LLM 规划的定制指令（智能规划），无则用默认文案
+                String instruction = (stepResult.getInstruction() != null && !stepResult.getInstruction().isBlank())
+                        ? stepResult.getInstruction()
+                        : "这是流水线编排的第 " + (i + 1) + " 步（共 " + total + " 步）。请基于需求和上游产出，产出你的专业内容。";
                 DerivationContext ctx = DerivationContext.builder()
                         .task(state.getRequirement())
                         .stage(artifactType)
                         .upstreamArtifacts(upstreamArtifacts.isEmpty() ? null : new HashMap<>(upstreamArtifacts))
-                        .extraInstructions("这是流水线编排的第 " + (i + 1) + " 步（共 " + pipeline.length
-                                + " 步）。请基于需求和上游产出，产出你的专业内容。")
+                        .extraInstructions(instruction)
                         .build();
 
-                log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}", i + 1, pipeline.length, role, state.getCaseId());
+                log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}", i + 1, total, role, state.getCaseId());
 
                 // 同步调用 engine.derive（在异步线程内阻塞等待 LLM 返回）
                 DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);
@@ -190,7 +204,7 @@ public class OrchestrationService {
 
                 stepResult.setStatus("success");
                 stepResult.setFinishedAt(LocalDateTime.now());
-                log.info("[Orchestration] 步骤 {}/{} 完成: role={}", i + 1, pipeline.length, role);
+                log.info("[Orchestration] 步骤 {}/{} 完成: role={}", i + 1, total, role);
 
                 // ★ 产出落地：把 LLM 产出写入工作区文件系统
                 if (result != null && result.getOutput() != null) {
@@ -204,7 +218,7 @@ public class OrchestrationService {
                 }
 
                 // 步骤间间隔（防 LLM 429 限流）
-                if (i < pipeline.length - 1 && stepIntervalMs > 0) {
+                if (i < total - 1 && stepIntervalMs > 0) {
                     Thread.sleep(stepIntervalMs);
                 }
 
@@ -222,11 +236,11 @@ public class OrchestrationService {
                 stepResult.setStatus("failed");
                 stepResult.setError(errMsg);
                 stepResult.setFinishedAt(LocalDateTime.now());
-                log.error("[Orchestration] 步骤 {}/{} 失败: role={}, error={}", i + 1, pipeline.length, role, errMsg, t);
+                log.error("[Orchestration] 步骤 {}/{} 失败: role={}, error={}", i + 1, total, role, errMsg, t);
 
                 // 失败后也等一下（可能是因为 429 限流，给后续步骤恢复时间）
                 try {
-                    if (i < pipeline.length - 1 && stepIntervalMs > 0) {
+                    if (i < total - 1 && stepIntervalMs > 0) {
                         Thread.sleep(stepIntervalMs);
                     }
                 } catch (InterruptedException ie) {
@@ -284,6 +298,98 @@ public class OrchestrationService {
     /** 查询编排进度。 */
     public OrchestrationState getState(Long id) {
         return stateMap.get(id);
+    }
+
+    /** JSON 解析器（LLM 规划结果解析）。 */
+    private static final com.fasterxml.jackson.databind.ObjectMapper OM =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * 智能规划流水线（#2 编排智能化）。
+     *
+     * <p>用 team-orchestrator 角色的 LLM 分析需求，动态生成流水线：
+     * 选哪些角色、什么顺序、每步定制指令。小需求少步骤省 token，大需求全流程。</p>
+     *
+     * <p><b>降级策略</b>：规划失败（LLM 异常/JSON 解析失败/角色不存在/步骤数越界）
+     * 一律保留 start() 预填的默认 fast 流水线，编排不中断。</p>
+     *
+     * @return true=规划成功并替换了步骤列表 / false=降级保留默认
+     */
+    boolean planPipelineWithLlm(OrchestrationState state) {
+        try {
+            AgentDefinition orchestrator = capabilityLoader.getAgent("team-orchestrator");
+            if (orchestrator == null) {
+                log.warn("[Orchestration] team-orchestrator 角色未注册，降级默认流水线");
+                return false;
+            }
+
+            // 用编排者角色的模型档位调 LLM（prompt 定义在 agents/team-orchestrator.md）
+            String tier = orchestrator.getModel() != null ? orchestrator.getModel() : "sonnet";
+            String model = adapterFactory.resolveModel(tier);
+            LlmAdapter llm = adapterFactory.getLlmAdapter(tier);
+            String prompt = orchestrator.getPrompt() + "\n\n---\n## 待规划需求\n" + state.getRequirement();
+            LlmAdapter.LlmResponse resp = llm.invoke(model, prompt,
+                    LlmAdapter.LlmOptions.builder().timeoutMs(60000L).build());
+
+            // 解析 JSON（清洗可能的 markdown 代码块包裹）
+            String content = cleanJson(resp.getContent());
+            com.fasterxml.jackson.databind.JsonNode root = OM.readTree(content);
+            com.fasterxml.jackson.databind.JsonNode stepsNode = root.get("steps");
+            if (stepsNode == null || !stepsNode.isArray() || stepsNode.size() < 1) {
+                log.warn("[Orchestration] LLM 规划 steps 为空，降级");
+                return false;
+            }
+            if (stepsNode.size() > 8) {
+                log.warn("[Orchestration] LLM 规划步骤数 {} 超上限 8，降级", stepsNode.size());
+                return false;
+            }
+
+            // 逐项校验角色存在，构建动态步骤列表
+            List<OrchestrationState.StepResult> planned = new java.util.ArrayList<>();
+            for (int i = 0; i < stepsNode.size(); i++) {
+                com.fasterxml.jackson.databind.JsonNode s = stepsNode.get(i);
+                String role = s.path("role").asText(null);
+                String artifactType = s.path("artifactType").asText("other");
+                String instruction = s.path("instruction").asText(null);
+                if (role == null || capabilityLoader.getAgent(role) == null) {
+                    log.warn("[Orchestration] LLM 规划的角色未注册: {}，降级", role);
+                    return false;
+                }
+                String label = OrchestrationState.StepResult.ROLE_LABELS.getOrDefault(role, role);
+                OrchestrationState.StepResult sr = OrchestrationState.StepResult.pending(
+                        i + 1, role, label, artifactType);
+                sr.setInstruction(instruction);
+                planned.add(sr);
+            }
+
+            // 校验通过 → 替换步骤列表 + 更新档位
+            state.setSteps(planned);
+            String plannedTier = root.path("tier").asText("standard");
+            state.setTier(plannedTier);
+            log.info("[Orchestration] 智能流水线: tier={}, steps={}",
+                    plannedTier, planned.stream().map(s -> s.getRole() + "(" + s.getArtifactType() + ")").toList());
+            return true;
+
+        } catch (Exception e) {
+            log.warn("[Orchestration] 智能规划异常，降级默认流水线: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** 清洗 LLM 返回的 JSON（去掉 markdown 代码块包裹和前后杂文）。 */
+    private String cleanJson(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim();
+        // 去 ```json ... ``` 包裹
+        if (s.startsWith("```")) {
+            int first = s.indexOf('\n');
+            int last = s.lastIndexOf("```");
+            if (first > 0 && last > first) s = s.substring(first + 1, last).trim();
+        }
+        // 截取第一个 { 到最后一个 }（防前后杂文）
+        int l = s.indexOf('{'), r = s.lastIndexOf('}');
+        if (l >= 0 && r > l) s = s.substring(l, r + 1);
+        return s;
     }
 
     /** 审批决定。 */

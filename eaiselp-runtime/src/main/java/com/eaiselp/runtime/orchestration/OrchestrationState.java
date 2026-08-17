@@ -75,6 +75,8 @@ public class OrchestrationState {
         private String status;
         /** 失败原因 */
         private String error;
+        /** 编排者给这一步的定制指令（智能规划时 LLM 生成） */
+        private String instruction;
         /** 步骤开始时间 */
         private LocalDateTime startedAt;
         /** 步骤完成时间 */
@@ -89,5 +91,23 @@ public class OrchestrationState {
             s.status = "pending";
             return s;
         }
+
+        /** 角色中文名映射（智能规划时前端展示用）。 */
+        public static final java.util.Map<String, String> ROLE_LABELS = java.util.Map.ofEntries(
+                java.util.Map.entry("team-po", "产品经理(PO)"),
+                java.util.Map.entry("team-ux", "体验设计(UX)"),
+                java.util.Map.entry("team-ba", "业务分析(BA)"),
+                java.util.Map.entry("team-se", "系统工程(SE)"),
+                java.util.Map.entry("team-dba", "数据库(DBA)"),
+                java.util.Map.entry("team-dev", "开发(Dev)"),
+                java.util.Map.entry("team-reviewer", "代码审查"),
+                java.util.Map.entry("team-security", "安全审查"),
+                java.util.Map.entry("team-qa", "测试(QA)"),
+                java.util.Map.entry("team-performance", "性能(Performance)"),
+                java.util.Map.entry("team-ops", "运维(Ops)"),
+                java.util.Map.entry("team-sre", "可靠性(SRE)"),
+                java.util.Map.entry("team-pm", "项目经理(PM)"),
+                java.util.Map.entry("team-orchestrator", "编排者")
+        );
     }
 }
