@@ -44,10 +44,17 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public LoginResponse login(LoginRequest req) {
         long start = System.currentTimeMillis();
-        // 1. 按 (tenant_id, username) 查用户。t_user 在 IGNORE_TABLES，需显式带 tenant_id 条件
+        // 1. 按用户名查用户（#23 多租户：先全局按用户名查，取用户实际 tenantId；
+        //    t_user 在 IGNORE_TABLES 不走租户拦截器，username 全局唯一）
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>()
-                .eq(User::getTenantId, defaultTenantId)
-                .eq(User::getUsername, req.getUsername()));
+                .eq(User::getUsername, req.getUsername())
+                .last("LIMIT 1"));
+        if (user == null) {
+            // 兜底：老逻辑按默认租户再查一次（防全局查因历史脏数据 miss）
+            user = userMapper.selectOne(new LambdaQueryWrapper<User>()
+                    .eq(User::getTenantId, defaultTenantId)
+                    .eq(User::getUsername, req.getUsername()));
+        }
         // 2-3. 用户不存在或密码错 → 统一 40001（防枚举，DFX 安全加固）
         //   用户不存在时也跑一次 dummy BCrypt 校验，保证响应时长恒定（防时间侧信道枚举）
         if (user == null) {
@@ -70,8 +77,8 @@ public class AuthServiceImpl implements AuthService {
         List<String> roleCodes = permissionService.getRoleCodesByUserId(user.getId());
         List<Long> roleIds = permissionService.getRoleIdsByUserId(user.getId());
         List<String> permissions = permissionService.getPermissionCodesByRoleIds(roleIds);
-        // 6. 查租户（取 tenantCode/tenantName 填 JWT payload + UserInfo）
-        Tenant tenant = tenantMapper.selectById(defaultTenantId);
+        // 6. 查租户（取 tenantCode/tenantName 填 JWT payload + UserInfo）——用用户实际租户
+        Tenant tenant = tenantMapper.selectById(user.getTenantId() != null ? user.getTenantId() : defaultTenantId);
         String tenantCode = tenant != null ? tenant.getTenantCode() : null;
         String tenantName = tenant != null ? tenant.getTenantName() : null;
         // 7. 签发 JWT（不含 permissions，Q-5）

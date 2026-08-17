@@ -48,9 +48,11 @@ public class RuntimeWebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(new RateLimitInterceptor(bucketRegistry))
                 .addPathPatterns("/api/**")
                 .order(0);
-        // 1. JWT 认证拦截器：所有 /api/** 都要 token（runtime 无公开接口）
+        // 1. JWT 认证拦截器：所有 /api/** 都要 token
+        //    白名单：租户自助注册（#23，未登录可访问）
         registry.addInterceptor(new JwtAuthInterceptor(jwtUtil))
                 .addPathPatterns("/api/**")
+                .excludePathPatterns("/api/v1/tenant/register")
                 .order(1);
         // 2. 权限校验拦截器：仅对 @RequiresPermission 标注的方法生效
         registry.addInterceptor(new PermissionInterceptor(permissionService))

@@ -29,6 +29,11 @@ public class Tenant extends BaseEntity {
     private String systemRepoUrl;
     private String systemBranch;
 
+    /** #24 租户自配 LLM：厂商（glm/deepseek），默认 glm */
+    private String llmProvider;
+    /** #24 租户自配 LLM：API Key（派生时优先用租户 Key，平台不垫付 token 费） */
+    private String llmApiKey;
+
     /** 覆盖父类 tenantId：t_tenant 表无此列 */
     @TableField(exist = false)
     private Long tenantId;

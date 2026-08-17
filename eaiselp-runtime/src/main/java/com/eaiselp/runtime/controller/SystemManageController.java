@@ -36,6 +36,7 @@ public class SystemManageController {
     private final com.eaiselp.data.mapper.PermissionMapper permissionMapper;
     private final com.eaiselp.data.mapper.RolePermissionMapper rolePermissionMapper;
     private final com.eaiselp.adapter.routing.mapper.ModelRoutingMapper modelRoutingMapper;
+    private final com.eaiselp.data.mapper.DerivationMapper derivationMapper;
 
     // ===== 角色管理 =====
 
@@ -206,5 +207,34 @@ public class SystemManageController {
         log.info("[Quota] 更新配额 id={} tenant={} → derivationLimit={}, tokenLimit={}",
                 id, db.getTenantId(), db.getDerivationLimit(), db.getTokenLimit());
         return R.ok(db);
+    }
+
+    // ===== 统计报表（#26） =====
+
+    /** 月度使用报表：派生次数/token/成功率 按月聚合。 */
+    @GetMapping("/report/monthly")
+    @RequirePermission("artifact:view")
+    public R<java.util.List<java.util.Map<String, Object>>> monthlyReport() {
+        var wrapper = new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<com.eaiselp.data.entity.Derivation>()
+                .select("DATE_FORMAT(create_time,'%Y-%m') AS month",
+                        "COUNT(*) AS derivationCount",
+                        "IFNULL(SUM(input_tokens),0)+IFNULL(SUM(output_tokens),0) AS tokenTotal",
+                        "SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) AS successCount")
+                .groupBy("DATE_FORMAT(create_time,'%Y-%m')")
+                .orderByDesc("month");
+        return R.ok(derivationMapper.selectMaps(wrapper));
+    }
+
+    /** 按角色统计（当前租户）。 */
+    @GetMapping("/report/by-role")
+    @RequirePermission("artifact:view")
+    public R<java.util.List<java.util.Map<String, Object>>> reportByRole() {
+        var wrapper = new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<com.eaiselp.data.entity.Derivation>()
+                .select("role", "COUNT(*) AS count",
+                        "IFNULL(SUM(input_tokens),0)+IFNULL(SUM(output_tokens),0) AS tokenTotal",
+                        "AVG(duration_ms) AS avgDurationMs")
+                .groupBy("role")
+                .orderByDesc("count");
+        return R.ok(derivationMapper.selectMaps(wrapper));
     }
 }

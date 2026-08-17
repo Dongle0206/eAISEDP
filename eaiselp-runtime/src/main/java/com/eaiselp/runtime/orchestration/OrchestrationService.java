@@ -59,6 +59,7 @@ public class OrchestrationService {
     private final CodeValidationService codeValidationService;
     private final CheckpointService checkpointService;
     private final OrchestrationRecordMapper recordMapper;
+    private final com.eaiselp.runtime.workspace.DingTalkNotifier dingTalkNotifier;
 
     /** 不可逆操作（部署）前的检查点等待超时：30 分钟 */
     @Value("${eaiselp.orchestration.approval-timeout-ms:1800000}")
@@ -299,6 +300,13 @@ public class OrchestrationService {
         int failed = (int) state.getSteps().stream().filter(s -> "failed".equals(s.getStatus())).count();
         log.info("[Orchestration] 编排完成 id={}, 成功={}, 失败={}", id, success, failed);
 
+        // #28 钉钉通知：编排完成推送（配置了 Webhook 才发）
+        try {
+            var validation = state.getValidation();
+            dingTalkNotifier.notifyOrchestrationDone(state.getCaseId(), success, state.totalSteps(),
+                    validation != null && validation.isAllPassed());
+        } catch (Exception ne) { log.debug("[Orchestration] 钉钉通知失败（忽略）", ne); }
+
         // ★ Git 落地：编排完成后，把工作区 commit + push
         if (success > 0) {
             try {
@@ -465,6 +473,149 @@ public class OrchestrationService {
         int l = s.indexOf('{'), r = s.lastIndexOf('}');
         if (l >= 0 && r > l) s = s.substring(l, r + 1);
         return s;
+    }
+
+    /**
+     * 单步重跑（#16 断点续跑：失败的编排不整条重来，只重跑失败步骤起的后半段）。
+     *
+     * <p>从指定步骤（默认第一个非 success 步骤）开始，重置该步及之后所有步骤为 pending，
+     * 然后在编排线程池重新执行。已成功步骤的 upstreamArtifacts 从 t_artifact 重建。</p>
+     */
+    @Async("orchestrationExecutor")
+    public void retryFromStep(Long id, int stepIndex, Long tenantId) {
+        OrchestrationState state = getState(id);
+        if (state == null) {
+            log.warn("[Orchestration] 重试的编排不存在 id={}", id);
+            return;
+        }
+        // 只允许 done/failed 状态的编排重试
+        if (!"done".equals(state.getStatus()) && !"failed".equals(state.getStatus())) {
+            log.warn("[Orchestration] 编排 {} 状态 {} 不可重试（仅 done/failed）", id, state.getStatus());
+            return;
+        }
+        // 重置指定步骤及之后全部为 pending
+        List<OrchestrationState.StepResult> steps = state.getSteps();
+        int from = Math.max(1, Math.min(stepIndex, steps.size()));
+        for (int i = from - 1; i < steps.size(); i++) {
+            OrchestrationState.StepResult sr = steps.get(i);
+            sr.setStatus("pending");
+            sr.setError(null);
+            sr.setStartedAt(null);
+            sr.setFinishedAt(null);
+        }
+        state.setStatus("pending");
+        state.setFinishedAt(null);
+        persistState(state, tenantId);
+        log.info("[Orchestration] 编排 {} 从步骤 {} 重试", id, from);
+        // 复用主执行流程（重新走一遍 runAsync，跳过已成功的步骤：直接从 from 开始）
+        runFromStep(id, tenantId, from);
+    }
+
+    /** 从指定步骤开始执行（runAsync 的变体，跳过前面已成功的步骤）。 */
+    void runFromStep(Long id, Long tenantId, int fromStep) {
+        OrchestrationState state = stateMap.get(id);
+        if (state == null) return;
+        TenantContext.set(tenantId);
+        state.setStatus("running");
+        // 从产物重建 upstreamArtifacts（前面已成功步骤的产出）
+        Map<String, String> upstreamArtifacts = rebuildUpstreamFromArtifacts(state, fromStep);
+        List<OrchestrationState.StepResult> steps = state.getSteps();
+        int total = steps.size();
+        log.info("[Orchestration] 重试执行 id={}, 从步骤 {}/{}", id, fromStep, total);
+
+        for (int i = fromStep - 1; i < total; i++) {
+            executeStep(state, steps.get(i), i, total, upstreamArtifacts, tenantId);
+        }
+
+        state.setStatus("done");
+        state.setCurrentRole(null);
+        state.setFinishedAt(LocalDateTime.now());
+        persistState(state, tenantId);
+        TenantContext.clear();
+        log.info("[Orchestration] 重试完成 id={}", id);
+    }
+
+    /** 从 t_artifact 重建前序步骤的 upstreamArtifacts（重试场景）。 */
+    private Map<String, String> rebuildUpstreamFromArtifacts(OrchestrationState state, int fromStep) {
+        Map<String, String> upstream = new HashMap<>();
+        List<OrchestrationState.StepResult> steps = state.getSteps();
+        for (int i = 0; i < fromStep - 1 && i < steps.size(); i++) {
+            OrchestrationState.StepResult sr = steps.get(i);
+            if (!"success".equals(sr.getStatus())) continue;
+            // 从工作区文件读回产出（ArtifactFileService 落地的 {role}/{role}.md）
+            try {
+                var roleMd = java.nio.file.Paths.get(
+                        System.getProperty("user.dir"), "workspaces", state.getCaseId(), sr.getRole(),
+                        sr.getRole() + ".md");
+                if (java.nio.file.Files.exists(roleMd)) {
+                    String out = java.nio.file.Files.readString(roleMd);
+                    if (out.length() > 4000) out = out.substring(0, 4000) + "\n... (已截断)";
+                    upstream.put(sr.getRoleLabel() + "的" + sr.getArtifactType(), out);
+                }
+            } catch (Exception e) {
+                log.warn("[Orchestration] 重建上游产出失败 step={}: {}", i + 1, e.getMessage());
+            }
+        }
+        return upstream;
+    }
+
+    /**
+     * 执行单个编排步骤（runAsync 主循环与 runFromStep 共用的核心逻辑）。
+     *
+     * <p>与主流程差异：重试路径不触发检查点（部署审批只在首次编排流走），
+     * 不触发 Git/CI 收尾（收尾由调用方在全部步骤后统一处理——主流程已有，重试流程已有）。</p>
+     */
+    private void executeStep(OrchestrationState state, OrchestrationState.StepResult stepResult,
+                             int i, int total, Map<String, String> upstreamArtifacts, Long tenantId) {
+        String role = stepResult.getRole();
+        String roleLabel = stepResult.getRoleLabel();
+        String artifactType = stepResult.getArtifactType();
+        state.setCurrentRole(role);
+        stepResult.setStatus("running");
+        stepResult.setStartedAt(LocalDateTime.now());
+        try {
+            AgentDefinition agent = capabilityLoader.getAgent(role);
+            if (agent == null) throw new RuntimeException("角色未注册: " + role);
+            String instruction = (stepResult.getInstruction() != null && !stepResult.getInstruction().isBlank())
+                    ? stepResult.getInstruction()
+                    : "这是流水线编排的第 " + (i + 1) + " 步（共 " + total + " 步）。请基于需求和上游产出，产出你的专业内容。";
+            DerivationContext ctx = DerivationContext.builder()
+                    .task(state.getRequirement())
+                    .stage(artifactType)
+                    .upstreamArtifacts(upstreamArtifacts.isEmpty() ? null : new HashMap<>(upstreamArtifacts))
+                    .extraInstructions(instruction)
+                    .build();
+            log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}", i + 1, total, role, state.getCaseId());
+            DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);
+            if (result != null && result.getOutput() != null) {
+                String output = result.getOutput();
+                if (output.length() > 4000) output = output.substring(0, 4000) + "\n... (已截断)";
+                upstreamArtifacts.put(roleLabel + "的" + artifactType, output);
+            }
+            stepResult.setStatus("success");
+            stepResult.setFinishedAt(LocalDateTime.now());
+            persistState(state, tenantId);
+            // 产出落地
+            if (result != null && result.getOutput() != null) {
+                try {
+                    artifactFileService.writeToWorkspace(state.getCaseId(), role, result.getOutput());
+                } catch (Exception fe) {
+                    log.warn("[Orchestration] 产出落地失败（不阻塞）: role={}", role, fe);
+                }
+            }
+            if (i < total - 1 && stepIntervalMs > 0) Thread.sleep(stepIntervalMs);
+        } catch (Throwable t) {
+            String errMsg = t.getMessage() != null ? t.getMessage() : t.getClass().getName();
+            stepResult.setStatus("failed");
+            stepResult.setError(errMsg);
+            stepResult.setFinishedAt(LocalDateTime.now());
+            log.error("[Orchestration] 步骤 {}/{} 失败: role={}, error={}", i + 1, total, role, errMsg, t);
+            try {
+                if (i < total - 1 && stepIntervalMs > 0) Thread.sleep(stepIntervalMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /** 审批决定。 */

@@ -178,6 +178,45 @@ public class RuntimeController {
         return R.ok(state);
     }
 
+    /**
+     * 编排单步重试（#16 断点续跑）。
+     *
+     * <p>失败的编排不整条重来——从第一个失败步骤（或指定步骤）重跑后半段，
+     * 已成功步骤的产出从工作区重建为上游上下文。</p>
+     *
+     * @param id  编排 ID
+     * @param step 从第几步重跑（1 起；默认 0=自动找第一个非成功步骤）
+     */
+    @PostMapping("/orchestrate/{id}/retry")
+    @RateLimit(name = "orchestrate-retry", key = RateLimit.KeyType.TENANT,
+            capacity = 5, refillPerMin = 5,
+            message = "重试请求过于频繁")
+    public ResponseEntity<R<Map<String, Object>>> retryOrchestration(
+            @PathVariable Long id,
+            @RequestParam(defaultValue = "0") int step) {
+        OrchestrationState state = orchestrationService.getState(id);
+        if (state == null) {
+            return ResponseEntity.ok(R.fail(404, "编排不存在: " + id));
+        }
+        if (!"done".equals(state.getStatus()) && !"failed".equals(state.getStatus())) {
+            return ResponseEntity.ok(R.fail(409, "仅已结束的编排可重试（当前: " + state.getStatus() + "）"));
+        }
+        // step=0 时自动找第一个非成功步骤
+        int fromStep = step;
+        if (fromStep <= 0) {
+            fromStep = 1;
+            for (OrchestrationState.StepResult sr : state.getSteps()) {
+                if ("success".equals(sr.getStatus())) fromStep = sr.getIndex() + 1;
+                else break;
+            }
+        }
+        Long tenantId = TenantContext.get();
+        orchestrationService.retryFromStep(id, fromStep, tenantId);
+        auditService.log("orchestrate_retry", "case", state.getCaseId(),
+                "{\"orchestrationId\":" + id + ",\"fromStep\":" + fromStep + "}");
+        return ResponseEntity.accepted().body(R.ok(Map.of("orchestrationId", id, "fromStep", fromStep, "status", "pending")));
+    }
+
     // ======================== 工作区文件浏览（产出落地） ========================
 
     /**

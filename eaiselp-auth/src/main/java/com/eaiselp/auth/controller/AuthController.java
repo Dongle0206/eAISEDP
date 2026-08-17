@@ -26,9 +26,18 @@ public class AuthController {
 
     /** POST /api/v1/auth/login —— 用户登录（白名单，不需 token）*/
     @PostMapping("/login")
-    public R<LoginResponse> login(@Valid @RequestBody LoginRequest req) {
+    public R<LoginResponse> login(@Valid @RequestBody LoginRequest req,
+                                   jakarta.servlet.http.HttpServletResponse response) {
         try {
             LoginResponse resp = authService.login(req);
+            // #32 安全增强：token 同时以 httpOnly Cookie 下发（XSS 无法读取，比 localStorage 安全）。
+            // 前端 api.js 优先用 localStorage（兼容现状），Cookie 作为双通道冗余。
+            jakarta.servlet.http.Cookie cookie = new jakarta.servlet.http.Cookie(
+                    "eaiselp_token", resp.getToken());
+            cookie.setHttpOnly(true);
+            cookie.setPath("/");
+            cookie.setMaxAge(86400);   // 与 JWT 过期一致（24h）
+            response.addCookie(cookie);
             // 审计：登录成功（userId 已在 resp.user 中，但此时 LoginUser 尚未注入拦截器——
             // login 接口是白名单，无 JWT，AuditService 内部 LoginUser.get() 会返回 null，
             // 故这里 userId/username 通过 detail 传递，AuditServiceImpl 的 claims=null 路径会兜底 tenantId=0）
