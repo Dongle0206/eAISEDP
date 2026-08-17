@@ -58,6 +58,7 @@ public class OrchestrationService {
     private final CICDTriggerService cicdTriggerService;
     private final CodeValidationService codeValidationService;
     private final CheckpointService checkpointService;
+    private final OrchestrationRecordMapper recordMapper;
 
     /** 不可逆操作（部署）前的检查点等待超时：30 分钟 */
     @Value("${eaiselp.orchestration.approval-timeout-ms:1800000}")
@@ -107,8 +108,45 @@ public class OrchestrationService {
         }
 
         stateMap.put(id, state);
+        persistState(state, tenantIdOfContext());   // 持久化初始状态
         log.info("[Orchestration] 编排任务创建 id={}, caseId={}, steps={}", id, caseId, pipeline.length);
         return id;
+    }
+
+    /** 从上下文取当前租户（启动线程有 TenantContext；异步线程显式传）。 */
+    private Long tenantIdOfContext() {
+        Long t = TenantContext.get();
+        return t != null ? t : 0L;
+    }
+
+    /**
+     * 编排状态持久化到 t_orchestration（#15：重启不丢）。
+     *
+     * <p>失败只 log 不阻塞（持久化是增强，内存态照常工作）。</p>
+     */
+    void persistState(OrchestrationState state, Long tenantId) {
+        try {
+            OrchestrationRecord r = new OrchestrationRecord();
+            r.setId(state.getId());
+            r.setTenantId(tenantId);
+            r.setCaseId(state.getCaseId());
+            r.setRequirement(state.getRequirement());
+            r.setTier(state.getTier());
+            r.setStatus(state.getStatus());
+            r.setCurrentRole(state.getCurrentRole());
+            r.setPendingCheckpointId(state.getPendingCheckpointId());
+            r.setApprovalMessage(state.getApprovalMessage());
+            r.setStepsJson(OM.writeValueAsString(state.getSteps()));
+            r.setValidationJson(state.getValidation() != null ? OM.writeValueAsString(state.getValidation()) : null);
+            r.setCreatedAt(state.getCreatedAt());
+            r.setFinishedAt(state.getFinishedAt());
+            // upsert：存在则 update，不存在则 insert
+            OrchestrationRecord exist = recordMapper.selectById(state.getId());
+            if (exist == null) recordMapper.insert(r);
+            else recordMapper.updateById(r);
+        } catch (Exception e) {
+            log.warn("[Orchestration] 状态持久化失败 id={}（不阻塞）: {}", state.getId(), e.getMessage());
+        }
     }
 
     /**
@@ -204,6 +242,7 @@ public class OrchestrationService {
 
                 stepResult.setStatus("success");
                 stepResult.setFinishedAt(LocalDateTime.now());
+                persistState(state, tenantId);   // 步骤完成持久化
                 log.info("[Orchestration] 步骤 {}/{} 完成: role={}", i + 1, total, role);
 
                 // ★ 产出落地：把 LLM 产出写入工作区文件系统
@@ -253,6 +292,7 @@ public class OrchestrationService {
         state.setStatus("done");
         state.setCurrentRole(null);
         state.setFinishedAt(LocalDateTime.now());
+        persistState(state, tenantId);   // 编排结束持久化
         TenantContext.clear();
 
         int success = (int) state.getSteps().stream().filter(s -> "success".equals(s.getStatus())).count();
@@ -295,9 +335,44 @@ public class OrchestrationService {
         }
     }
 
-    /** 查询编排进度。 */
+    /** 查询编排进度（内存优先，重启后从 DB 恢复）。 */
     public OrchestrationState getState(Long id) {
-        return stateMap.get(id);
+        OrchestrationState s = stateMap.get(id);
+        if (s != null) return s;
+        // #15 重启恢复：内存 miss 从 t_orchestration 读回
+        try {
+            OrchestrationRecord r = recordMapper.selectById(id);
+            if (r == null) return null;
+            OrchestrationState restored = new OrchestrationState();
+            restored.setId(r.getId());
+            restored.setCaseId(r.getCaseId());
+            restored.setRequirement(r.getRequirement());
+            restored.setTier(r.getTier());
+            restored.setStatus(r.getStatus());
+            restored.setCurrentRole(r.getCurrentRole());
+            restored.setPendingCheckpointId(r.getPendingCheckpointId());
+            restored.setApprovalMessage(r.getApprovalMessage());
+            restored.setCreatedAt(r.getCreatedAt());
+            restored.setFinishedAt(r.getFinishedAt());
+            if (r.getStepsJson() != null) {
+                restored.setSteps(OM.readValue(r.getStepsJson(),
+                        OM.getTypeFactory().constructCollectionType(java.util.ArrayList.class, OrchestrationState.StepResult.class)));
+            }
+            if (r.getValidationJson() != null) {
+                restored.setValidation(OM.readValue(r.getValidationJson(), OrchestrationState.CodeValidationSummary.class));
+            }
+            // 服务重启后 running 态的编排线程已死，标记为 failed（成果在产物/工作区可查）
+            if ("running".equals(restored.getStatus()) || "awaiting_approval".equals(restored.getStatus())) {
+                restored.setStatus("failed");
+                restored.setApprovalMessage(null);
+                log.warn("[Orchestration] 重启恢复: 编排 {} 曾在运行中（线程已丢失），标记 failed", id);
+            }
+            stateMap.put(id, restored);
+            return restored;
+        } catch (Exception e) {
+            log.warn("[Orchestration] DB 恢复失败 id={}: {}", id, e.getMessage());
+            return null;
+        }
     }
 
     /** JSON 解析器（LLM 规划结果解析）。 */
@@ -416,6 +491,7 @@ public class OrchestrationService {
             state.setPendingCheckpointId(cp.getId());
             state.setApprovalMessage("部署为不可逆操作，等待人工审批（检查点 #" + cp.getId()
                     + "）。请到「检查点审批」页面确认或拒绝。30 分钟无审批自动跳过。");
+            persistState(state, TenantContext.get() != null ? TenantContext.get() : 0L);   // 审批等待持久化
             log.info("[Orchestration] 等待部署审批 id={}, checkpointId={}", state.getId(), cp.getId());
 
             // 3. 轮询等待（5 秒一次）
