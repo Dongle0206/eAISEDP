@@ -32,6 +32,9 @@ public class OrchestrationState {
     /** 等待审批的提示信息 */
     private String approvalMessage;
 
+    /** 门禁打回时待注入重跑步骤的审查意见（用后清空） */
+    private String pendingGateFeedback;
+
     /** 流水线步骤列表 */
     private List<StepResult> steps = new ArrayList<>();
 
@@ -73,6 +76,13 @@ public class OrchestrationState {
         private String artifactType;
         /** pending / running / success / failed / skipped（检查点被拒时跳过） */
         private String status;
+
+        /** 质量门禁判定结果（门禁角色专用）：PASS / FAIL / null（非门禁步骤） */
+        private String gateResult;
+        /** 门禁 FAIL 时的原因（注入打回重做） */
+        private String gateReason;
+        /** 该步骤被门禁打回重跑的次数 */
+        private int rerunCount;
         /** 失败原因 */
         private String error;
         /** 编排者给这一步的定制指令（智能规划时 LLM 生成） */

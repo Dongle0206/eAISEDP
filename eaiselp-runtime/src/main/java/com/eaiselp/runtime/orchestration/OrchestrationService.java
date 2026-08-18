@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 编排服务 —— 一句话需求自动按流水线派生所有角色。
@@ -82,6 +84,69 @@ public class OrchestrationService {
             {"team-qa",       "测试(QA)",       "test"},
             {"team-ops",      "运维(Ops)",      "deploy"},
     };
+
+    // ======================== 质量门禁（Quality Gate） ========================
+
+    /** 门禁角色集合：这些步骤的产出必须含 GATE:PASS/FAIL 判定，FAIL 自动打回重做 */
+    private static final java.util.Set<String> GATE_ROLES = java.util.Set.of(
+            "team-reviewer", "team-qa", "team-security", "team-performance");
+
+    /** 门禁打回重做的最大轮次（超过则编排失败，拒绝部署有问题产出） */
+    @Value("${eaiselp.orchestration.gate-max-retries:2}")
+    private int gateMaxRetries;
+
+    /** 门禁判定标记 */
+    private static final Pattern GATE_PASS_PATTERN = Pattern.compile("GATE\\s*:\\s*PASS", Pattern.CASE_INSENSITIVE);
+    private static final Pattern GATE_FAIL_PATTERN = Pattern.compile(
+            "GATE\\s*:\\s*FAIL\\s*[:：]?\\s*(.{0,500})", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
+    /** 门禁角色步骤的指令增强：强制输出结构化判定 */
+    private static final String GATE_INSTRUCTION_SUFFIX = "\n\n【质量门禁要求】你是质量门禁角色。" +
+            "审查/测试完成后，必须在产出的最后一行给出明确判定（二选一）：\n" +
+            "- 通过：输出 GATE:PASS\n" +
+            "- 不通过：输出 GATE:FAIL: 具体问题清单（每个问题一行，供开发修复）\n" +
+            "判定必须基于实际检查结果，不得敷衍放行。";
+
+    /**
+     * 解析门禁判定。
+     * @return "PASS" / "FAIL" / null（未找到判定标记，视为 PASS 放行并告警——
+     *         LLM 忘记输出判定时不卡死流程，但 log 提示）
+     */
+    static String parseGateResult(String llmOutput) {
+        if (llmOutput == null || llmOutput.isBlank()) return null;
+        // 先查 FAIL（PASS 是 FAIL 的子串反例不存在，但 FAIL 带原因优先匹配）
+        Matcher fail = GATE_FAIL_PATTERN.matcher(llmOutput);
+        if (fail.find()) return "FAIL";
+        Matcher pass = GATE_PASS_PATTERN.matcher(llmOutput);
+        if (pass.find()) return "PASS";
+        return null;
+    }
+
+    /** 提取门禁 FAIL 的原因（供打回注入）。 */
+    static String extractGateReason(String llmOutput) {
+        if (llmOutput == null) return "未提供原因";
+        Matcher m = GATE_FAIL_PATTERN.matcher(llmOutput);
+        if (m.find()) {
+            String reason = m.group(1) == null ? "" : m.group(1).trim();
+            // 截断到 500 字符（防超长）
+            return reason.length() > 500 ? reason.substring(0, 500) : reason;
+        }
+        return "未提供原因";
+    }
+
+    /** 判断步骤是否为门禁角色。 */
+    static boolean isGateStep(String role) {
+        return GATE_ROLES.contains(role);
+    }
+
+    /** 找门禁步骤应打回的上游步骤索引（最近的 code 类型步骤，通常为 Dev）。 */
+    static int findRerunTarget(List<OrchestrationState.StepResult> steps, int gateIndex) {
+        for (int i = gateIndex - 1; i >= 0; i--) {
+            if ("code".equals(steps.get(i).getArtifactType())) return i;
+        }
+        // 无 code 步骤时打回门禁前一步
+        return Math.max(0, gateIndex - 1);
+    }
 
     /**
      * 创建编排任务（同步返回 ID，异步执行流水线）。
@@ -181,8 +246,14 @@ public class OrchestrationService {
             log.info("[Orchestration] 智能规划降级为默认 fast 流水线 id={}", id);
         }
 
-        for (int i = 0; i < total; i++) {
+        // while 循环 + 门禁回跳（Quality Gate：门禁 FAIL 自动打回上游重做）
+        int i = 0;
+        java.util.Map<Integer, Integer> gateRerunCounts = new HashMap<>();
+        while (i < total) {
             OrchestrationState.StepResult stepResult = steps.get(i);
+            if ("success".equals(stepResult.getStatus()) || "skipped".equals(stepResult.getStatus())) {
+                i++; continue;   // 已完成步骤（重跑后回到此处跳过已成功前序）
+            }
             String role = stepResult.getRole();
             String roleLabel = stepResult.getRoleLabel();
             String artifactType = stepResult.getArtifactType();
@@ -203,7 +274,7 @@ public class OrchestrationService {
                         stepResult.setFinishedAt(LocalDateTime.now());
                         state.setCurrentRole(null);
                         log.warn("[Orchestration] 部署步骤被跳过 id={}, 原因={}", id, decision);
-                        continue; // 跳过本步骤（team-ops 是最后一步，直接进收尾）
+                        i++; continue;
                     }
                     // approved → 继续执行部署
                 }
@@ -219,6 +290,16 @@ public class OrchestrationService {
                 String instruction = (stepResult.getInstruction() != null && !stepResult.getInstruction().isBlank())
                         ? stepResult.getInstruction()
                         : "这是流水线编排的第 " + (i + 1) + " 步（共 " + total + " 步）。请基于需求和上游产出，产出你的专业内容。";
+                // 门禁打回反馈注入（重跑步骤带上审查意见）
+                if (state.getPendingGateFeedback() != null && !state.getPendingGateFeedback().isBlank()) {
+                    instruction += "\n\n【上一轮质量审查未通过，必须修复以下问题后重新产出】\n"
+                            + state.getPendingGateFeedback();
+                    state.setPendingGateFeedback(null);   // 用后清空
+                }
+                // 门禁角色追加判定格式要求
+                boolean isGate = isGateStep(role);
+                if (isGate) instruction += GATE_INSTRUCTION_SUFFIX;
+
                 DerivationContext ctx = DerivationContext.builder()
                         .task(state.getRequirement())
                         .stage(artifactType)
@@ -226,10 +307,58 @@ public class OrchestrationService {
                         .extraInstructions(instruction)
                         .build();
 
-                log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}", i + 1, total, role, state.getCaseId());
+                log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}{}", i + 1, total, role, state.getCaseId(),
+                        isGate ? " [GATE]" : "");
 
                 // 同步调用 engine.derive（在异步线程内阻塞等待 LLM 返回）
                 DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);
+
+                // ★ 质量门禁判定：解析 GATE:PASS/FAIL
+                if (isGate && result != null && result.getOutput() != null) {
+                    String gate = parseGateResult(result.getOutput());
+                    if ("FAIL".equals(gate)) {
+                        String reason = extractGateReason(result.getOutput());
+                        int rerun = gateRerunCounts.merge(i, 1, Integer::sum);
+                        if (rerun > gateMaxRetries) {
+                            // 超过重做上限 → 门禁终判失败，编排终止（拒绝部署有问题产出）
+                            stepResult.setStatus("failed");
+                            stepResult.setGateResult("FAIL");
+                            stepResult.setGateReason(reason);
+                            stepResult.setError("质量门禁 " + gateMaxRetries + " 轮重做后仍未通过: " + reason);
+                            stepResult.setFinishedAt(LocalDateTime.now());
+                            log.warn("[Orchestration] 质量门禁终判失败 id={}, gate={}, 轮次={}, 原因={}",
+                                    id, role, rerun - 1, reason);
+                            // 后续步骤全部标记 skipped（不部署有问题产出）
+                            for (int j = i + 1; j < total; j++) {
+                                steps.get(j).setStatus("skipped");
+                                steps.get(j).setError("上游质量门禁未通过，本步骤不执行");
+                            }
+                            break;
+                        }
+                        // 打回重做：审查意见存入 pendingGateFeedback，回退到上游 code 步骤
+                        stepResult.setGateResult("FAIL");
+                        stepResult.setGateReason(reason);
+                        stepResult.setRerunCount(rerun);
+                        state.setPendingGateFeedback(reason);
+                        int target = findRerunTarget(steps, i);
+                        steps.get(target).setRerunCount(steps.get(target).getRerunCount() + 1);
+                        log.warn("[Orchestration] 质量门禁 FAIL 打回重做 id={}, gate={}, 第{}轮, 打回到步骤{} ({}), 原因={}",
+                                id, role, rerun, target + 1, steps.get(target).getRole(), reason);
+                        // 重置打回步骤为 pending（本门禁步骤也重置）
+                        steps.get(target).setStatus("pending");
+                        stepResult.setStatus("pending");
+                        i = target;   // 回跳
+                        persistState(state, tenantId);
+                        continue;
+                    }
+                    // PASS（或 LLM 忘输出判定视为 PASS 放行并告警）
+                    stepResult.setGateResult("PASS");
+                    if (gate == null) {
+                        log.warn("[Orchestration] 门禁角色 {} 未输出 GATE 判定标记，视为 PASS 放行（建议检查 prompt）", role);
+                    } else {
+                        log.info("[Orchestration] 质量门禁 PASS: {} (caseId={})", role, state.getCaseId());
+                    }
+                }
 
                 // 把这一步的产出存入 upstreamArtifacts 供后续步骤使用
                 if (result != null && result.getOutput() != null) {
@@ -288,6 +417,7 @@ public class OrchestrationService {
                     break;
                 }
             }
+            i++;   // while 循环手动递增（门禁回跳时 continue 前已设置目标索引）
         }
 
         state.setStatus("done");
