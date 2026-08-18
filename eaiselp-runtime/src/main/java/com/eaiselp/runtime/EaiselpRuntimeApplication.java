@@ -9,7 +9,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 @MapperScan({               // M2 SP-6 扩展：adapter 模块新增 ModelRoutingMapper（ModelRoutingService 放 adapter 内部，ES-003 §9.2/P3），一并扫描
         "com.eaiselp.data.mapper",
-        "com.eaiselp.adapter.routing.mapper"
+        "com.eaiselp.adapter.routing.mapper",
+        "com.eaiselp.runtime.orchestration"   // #15 编排持久化 OrchestrationRecordMapper
 })
 @SpringBootApplication(scanBasePackages = {
         "com.eaiselp.runtime",
