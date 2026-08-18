@@ -33,3 +33,5 @@
 ### 变更登记（team-pm）
 - 2026-08-18 | 需求 | 三层贯通企业级平台骨架（L3战略→L2项目群/项目→L1 Case 四级联动+下行约束+上行事件） | 平台Owner（dogfooding核心需求） | 新增t_strategy/t_program/t_project/t_architecture_principle/t_quality_gate_rule五表、Case表加project_id外键、三级CRUD API、三级管理页面、编排上下文注入机制、项目进度自动汇总
 - 2026-08-18 | 交付 | 三层贯通骨架交付（237测全绿，联测清单45条待部署机执行）
+- 2026-08-18 | 需求 | 交付收尾+API文档（D5注入可见/D10门禁旁路/D4D7入口/M2定界/Swagger） | 三层贯通评审遗留 | 前端编排详情/OrchestrationService重试路径/2页面入口/注入定界/springdoc
+- 2026-08-18 | 交付 | 收尾5项+Swagger交付（242测全绿）

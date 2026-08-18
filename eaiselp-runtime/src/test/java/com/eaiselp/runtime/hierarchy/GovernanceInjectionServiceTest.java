@@ -66,7 +66,9 @@ class GovernanceInjectionServiceTest {
 
         assertNotNull(r.getGovernanceText(), "有可注入内容时不得返回空文本（禁止空标题章节的反面：有内容必须有章节）");
         String text = r.getGovernanceText();
-        assertTrue(text.startsWith(GovernanceInjectionService.SECTION_TITLE), "章节以 AC-F7.1 断言标题开头");
+        assertTrue(text.startsWith(GovernanceInjectionService.DELIM_START), "M2 定界：文本须以开始定界标记开头");
+        assertTrue(text.endsWith(GovernanceInjectionService.DELIM_END), "M2 定界：文本须以结束定界标记收尾");
+        assertTrue(text.contains(GovernanceInjectionService.SECTION_TITLE), "章节正文以 AC-F7.1 断言标题开头");
         assertTrue(text.contains("P11"), "须含原则编号");
         assertTrue(text.contains("[P11|must]"), "须含 编号|强制级别 标记");
         assertTrue(text.contains("多租户隔离"), "须含原则标题");
@@ -76,6 +78,32 @@ class GovernanceInjectionServiceTest {
         assertTrue(text.contains("金融行业项目"), "须含项目描述正文");
         assertEquals(List.of("P11"), r.getInjectedPrinciples(), "注入清单=实际注入的 code 列表");
         assertFalse(r.isTruncated());
+    }
+
+    // ===== AC-M2.1：注入文本被定界标记包裹并附"平台注入、不得修改/追加"声明 =====
+
+    @Test
+    void 注入文本被定界标记包裹_附平台注入不可修改声明() {
+        stubCaseProjectBindings(null,
+                List.of(binding(100L, 1)),
+                principle(100L, "P11", "must", "内容", 1));
+
+        GovernanceInjectionService.InjectionResult r = service.resolveInjection("case-1", null);
+
+        String text = r.getGovernanceText();
+        int start = text.indexOf(GovernanceInjectionService.DELIM_START);
+        int end = text.lastIndexOf(GovernanceInjectionService.DELIM_END);
+        assertEquals(0, start, "定界开始标记必须在文本首");
+        assertEquals(text.length() - GovernanceInjectionService.DELIM_END.length(), end,
+                "定界结束标记必须在文本尾");
+        assertTrue(end > start, "开始/结束标记必须成对出现（首尾包裹）");
+        assertTrue(text.contains(GovernanceInjectionService.PLATFORM_DECLARE),
+                "须附平台注入声明（不得修改/不得追加）");
+        // 声明须在开始标记之后、章节标题之前（角色读到约束前先知道"这是平台注入"）
+        int declareAt = text.indexOf(GovernanceInjectionService.PLATFORM_DECLARE);
+        int titleAt = text.indexOf(GovernanceInjectionService.SECTION_TITLE);
+        assertTrue(declareAt > start && declareAt < titleAt, "声明位于定界开始标记与章节标题之间");
+        assertEquals(text.length(), r.getRenderedChars(), "留痕字符数与最终文本（含定界）一致");
     }
 
     // ===== AC-F5.2 语义：绑定保留但原则租户级停用 → 不注入该原则 =====

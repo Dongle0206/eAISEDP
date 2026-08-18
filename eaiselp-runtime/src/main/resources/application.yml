@@ -45,6 +45,11 @@ mybatis-plus:                                                    # M1.2 新增�
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0
+springdoc:                                                       # case-20260818 OpenAPI 文档（Swagger UI: /swagger-ui.html）
+  api-docs:
+    enabled: ${SPRINGDOC_ENABLED:true}                           # 默认 true 便于测试机自助查契约；生产置 SPRINGDOC_ENABLED=false（防接口清单外泄，AC-SW.2）
+  swagger-ui:
+    enabled: ${SPRINGDOC_ENABLED:true}                           # UI 与 api-docs 同开同关（单关 UI 会留半残页面）
 eaiselp:
   workspace:                                                                   # 产出落地链路：AI 产出 → 文件系统 → Git
     root: ${WORKSPACE_ROOT:./workspaces}                                       # 工作区根目录（每个 Case 一个子目录）

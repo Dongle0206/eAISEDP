@@ -56,10 +56,13 @@ public class RuntimeWebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**")
                 .order(0);
         // 1. JWT 认证拦截器：所有 /api/** 都要 token
-        //    白名单：租户自助注册（#23，未登录可访问）
+        //    白名单：租户自助注册（#23，未登录可访问）+ OpenAPI 文档路径（Swagger/AC-SW.3：
+        //    /v3/api-docs/**、/swagger-ui/**、/swagger-ui.html 不被 401 挡下，匿名可查——
+        //    文档本身不含业务数据，生产防外泄由 SPRINGDOC_ENABLED=false 整体关闭兜底）
         registry.addInterceptor(new JwtAuthInterceptor(jwtUtil))
                 .addPathPatterns("/api/**")
                 .excludePathPatterns("/api/v1/tenant/register")
+                .excludePathPatterns("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html")
                 .order(1);
         // 2. 权限校验拦截器：仅对 @RequiresPermission 标注的方法生效
         registry.addInterceptor(new PermissionInterceptor(permissionService))

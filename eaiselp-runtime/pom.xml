@@ -28,6 +28,9 @@
         <dependency><groupId>org.eclipse.jgit</groupId><artifactId>org.eclipse.jgit</artifactId><version>6.9.0.202403050737-r</version></dependency>
         <!-- Flyway 数据库版本管理（#22：schema 变更自动迁移，解决部署漂移） -->
         <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-mysql</artifactId></dependency>
+        <!-- Swagger/OpenAPI 文档（case-20260818）：springdoc 2.3.0 匹配父 POM Boot 3.2.5；
+             生产通过 SPRINGDOC_ENABLED=false 关闭（application.yml springdoc 开关），防接口清单外泄 -->
+        <dependency><groupId>org.springdoc</groupId><artifactId>springdoc-openapi-starter-webmvc-ui</artifactId><version>2.3.0</version></dependency>
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>

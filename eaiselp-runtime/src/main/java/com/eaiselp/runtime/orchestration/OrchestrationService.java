@@ -598,7 +598,9 @@ public class OrchestrationService {
                         .stage(artifactType)
                         .upstreamArtifacts(upstreamArtifacts.isEmpty() ? null : new HashMap<>(upstreamArtifacts))
                         .extraInstructions(instruction)
-                        .governanceContext(state.getGovernanceContext())   // T22：每步复用同一份注入快照
+                        // M2 门禁豁免（裁判中立）：门禁角色只审产出不受治理文本影响（防被治理措辞操纵判定），
+                        // 门禁步骤 governanceContext 置 null；非门禁步骤行为不变（T22 注入快照复用）
+                        .governanceContext(isGate ? null : state.getGovernanceContext())
                         .build();
 
                 log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}{}", i + 1, total, role, state.getCaseId(),
@@ -948,9 +950,22 @@ public class OrchestrationService {
             log.warn("[Orchestration] 编排 {} 状态 {} 不可重试（仅 done/failed）", id, state.getStatus());
             return;
         }
-        // 重置指定步骤及之后全部为 pending
         List<OrchestrationState.StepResult> steps = state.getSteps();
         int from = Math.max(1, Math.min(stepIndex, steps.size()));
+        // ★ D10 门禁终判防旁路（AC-D10.1）：重试区间 [from, 末尾] 内存在门禁终判步骤
+        //   （重做轮次超限、status=failed 且 gateResult=FAIL）→ 拒绝重试，状态保持原样——
+        //   门禁终判不可被断点续跑绕过（否则有问题产出可经重试直达部署）。
+        //   控制器入口（RuntimeController.retryOrchestration）同规则返回 409 业务码给前端；
+        //   此处是异步入口防线（覆盖其他调用方），拒绝语义 = log + 不动状态。
+        OrchestrationState.StepResult finalGate = finalFailedGateInRange(steps, from);
+        if (finalGate != null) {
+            log.error("[Orchestration][Gate] 断点续跑被拒绝（门禁终判不可旁路，409）id={}, fromStep={}, "
+                            + "终判步骤={}({}, gateResult=FAIL, rerunCount={}), 原因={}",
+                    id, from, finalGate.getIndex(), finalGate.getRole(),
+                    finalGate.getRerunCount(), finalGate.getGateReason());
+            return;
+        }
+        // 重置指定步骤及之后全部为 pending
         for (int i = from - 1; i < steps.size(); i++) {
             OrchestrationState.StepResult sr = steps.get(i);
             sr.setStatus("pending");
@@ -966,10 +981,47 @@ public class OrchestrationService {
         runFromStep(id, tenantId, from);
     }
 
+    /**
+     * 定位重试区间内的门禁终判步骤（D10，AC-D10.1）。
+     *
+     * <p><b>终判定义</b>：{@code status=failed} 且 {@code gateResult=FAIL}——即 runAsync 中
+     * 门禁重做轮次超限（rule.maxRetries 或 yml 兜底）后的终判失败。三类近似态不算终判：</p>
+     * <ul>
+     *   <li>FAIL_WARN（fail_action=warn 记录放行，gateResult=FAIL_WARN ≠ FAIL）</li>
+     *   <li>打回重做中的中间 FAIL（gateResult=FAIL 但 status=pending/running/success）</li>
+     *   <li>门禁步骤的基础设施失败（status=failed 但无 FAIL 判定，如 LLM 超时——可正常重试）</li>
+     * </ul>
+     *
+     * @param fromStep 重试起始步（1 起，含本步）
+     * @return 区间内首个终判步骤；无终判（含无门禁场景）返回 null
+     */
+    public static OrchestrationState.StepResult finalFailedGateInRange(List<OrchestrationState.StepResult> steps, int fromStep) {
+        if (steps == null || steps.isEmpty()) {
+            return null;
+        }
+        for (int i = Math.max(0, fromStep - 1); i < steps.size(); i++) {
+            OrchestrationState.StepResult s = steps.get(i);
+            if ("failed".equals(s.getStatus()) && "FAIL".equals(s.getGateResult())) {
+                return s;
+            }
+        }
+        return null;
+    }
+
     /** 从指定步骤开始执行（runAsync 的变体，跳过前面已成功的步骤）。 */
     void runFromStep(Long id, Long tenantId, int fromStep) {
         OrchestrationState state = stateMap.get(id);
         if (state == null) return;
+        // ★ D10 门禁终判防旁路（执行入口第二道防线）：即使调用方绕过 retryFromStep 的重置前检查
+        //   直接进入本方法，区间内的门禁终判同样拒绝执行——不给旁路留缝。
+        //   正常路径（retryFromStep 已重置步骤为 pending）此处检查必为 null，零行为变化（AC-D10.3）。
+        OrchestrationState.StepResult finalGate = finalFailedGateInRange(state.getSteps(), fromStep);
+        if (finalGate != null) {
+            log.error("[Orchestration][Gate] runFromStep 拒绝执行（门禁终判不可旁路，409）id={}, fromStep={}, "
+                            + "终判步骤={}({})",
+                    id, fromStep, finalGate.getIndex(), finalGate.getRole());
+            return;
+        }
         TenantContext.set(tenantId);
         state.setStatus("running");
         // T22 复用注入快照：内存态已有（首次编排解析过）则直接复用同一份；缺失（重启恢复的旧记录，
@@ -1041,7 +1093,8 @@ public class OrchestrationService {
                     : "这是流水线编排的第 " + (i + 1) + " 步（共 " + total + " 步）。请基于需求和上游产出，产出你的专业内容。";
             // 门禁步骤追加判定格式要求（T19：与主流程同一 SUFFIX，保证重试产物形状含 GATE 判定；
             // 重试路径不解析判定/不等待审批——既有断点续跑语义，不在本次等价改造范围内变更）
-            if ("llm_review".equals(stepResult.getGateType())) {
+            boolean isGate = "llm_review".equals(stepResult.getGateType());
+            if (isGate) {
                 instruction += GATE_INSTRUCTION_SUFFIX;
             }
             DerivationContext ctx = DerivationContext.builder()
@@ -1049,7 +1102,8 @@ public class OrchestrationService {
                     .stage(artifactType)
                     .upstreamArtifacts(upstreamArtifacts.isEmpty() ? null : new HashMap<>(upstreamArtifacts))
                     .extraInstructions(instruction)
-                    .governanceContext(state.getGovernanceContext())   // T22：重试路径同样复用注入快照
+                    // M2 门禁豁免（裁判中立）：与主流程同规则——门禁步骤不注入治理文本，防判定被治理措辞操纵
+                    .governanceContext(isGate ? null : state.getGovernanceContext())
                     .build();
             log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}", i + 1, total, role, state.getCaseId());
             DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);

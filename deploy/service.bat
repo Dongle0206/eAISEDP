@@ -77,7 +77,8 @@ if not exist eaiselp-runtime\target\eaiselp-runtime.jar (
     echo [ERROR] runtime jar 不存在，请先 build
     exit /b 1
 )
-start "eaiselp-runtime" cmd /k "cd /d %PLATFORM_DIR% && java -Xms512m -Xmx1g -jar eaiselp-runtime\target\eaiselp-runtime.jar"
+REM 生产默认关闭 OpenAPI/Swagger 文档（防接口清单外泄；测试机需要时删掉 SPRINGDOC_ENABLED=false）
+start "eaiselp-runtime" cmd /k "cd /d %PLATFORM_DIR% && set SPRINGDOC_ENABLED=false&& java -Xms512m -Xmx1g -jar eaiselp-runtime\target\eaiselp-runtime.jar"
 echo [OK] runtime 已在新窗口启动
 goto end
 

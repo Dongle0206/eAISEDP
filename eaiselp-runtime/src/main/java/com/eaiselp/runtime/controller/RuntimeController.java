@@ -210,6 +210,21 @@ public class RuntimeController {
                 else break;
             }
         }
+        // ★ D10 门禁终判防旁路（AC-D10.1）：重试区间内存在门禁终判步骤（重做超限、failed 且
+        //   gateResult=FAIL）→ 409 业务码拒绝，前端重试按钮区透出后端 message——门禁终判不可
+        //   被断点续跑绕过；无门禁终判（含无门禁编排）行为与现状一致（AC-D10.3）
+        OrchestrationState.StepResult finalGate =
+                OrchestrationService.finalFailedGateInRange(state.getSteps(), fromStep);
+        if (finalGate != null) {
+            auditService.log("orchestrate_retry_rejected", "case", state.getCaseId(),
+                    "{\"orchestrationId\":" + id + ",\"fromStep\":" + fromStep
+                            + ",\"gateStep\":" + finalGate.getIndex() + "}",
+                    "failure", "门禁终判不可旁路");
+            return ResponseEntity.ok(R.fail(409, "门禁终判不可旁路：步骤 " + finalGate.getIndex()
+                    + "（" + finalGate.getRole() + "）质量门禁重做超限终判 FAIL（"
+                    + (finalGate.getGateReason() == null ? "" : finalGate.getGateReason())
+                    + "），禁止断点续跑绕过。如需重做请发起新编排。"));
+        }
         Long tenantId = TenantContext.get();
         orchestrationService.retryFromStep(id, fromStep, tenantId);
         auditService.log("orchestrate_retry", "case", state.getCaseId(),
