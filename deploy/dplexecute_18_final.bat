@@ -51,9 +51,9 @@ set "WEB_DIR=D:\eaiselp\web"
 set "AGENTS_DIR=D:\eaiselp\agents-config"
 set "MYSQL_CONTAINER=eaiselp-mysql"
 set "MYSQL_ROOT_PWD=root"
-set "JAVA_HOME="
-REM ★ 必配：GLM API Key（不配编排会失败）
-REM set "GLM_API_KEY=你的智谱Key"
+REM 测试机固定参数（用户提供 2026-08-18）
+set "JAVA_HOME=D:\jdk-17\jdk-17.0.19+10"
+set "GLM_API_KEY=3f3582bb3f2243fba844dea90cd2a75b.s7J8gzxCXCvbEw1U"
 REM 可选配置（取消注释启用）：
 REM set "GIT_REMOTE_URL=https://your-gitlab.com/your-repo.git"
 REM set "GIT_TOKEN=your_git_token"
