@@ -129,7 +129,9 @@ if errorlevel 1 (
     echo   × MySQL 容器未运行！启动: docker start %MYSQL_CONTAINER%
     pause & exit /b 1
 )
-echo   √ MySQL 正常（Flyway 启动时自动迁移 schema，无需手动建表）
+REM 清理 Flyway 失败的迁移记录（修复 V3 语法错误后重跑需要）
+docker exec %MYSQL_CONTAINER% mysql -uroot -p%MYSQL_ROOT_PWD% eaiselp -e "DELETE FROM flyway_schema_history WHERE success = 0;" >nul 2>nul
+echo   √ MySQL 正常（已清理失败迁移记录，Flyway 启动时自动迁移）
 
 REM ============ Step 5: 启动 auth ============
 echo [5/7] 启动后端...
