@@ -1,10 +1,13 @@
 package com.eaiselp.runtime.controller;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.eaiselp.common.constant.PlatformConst;
 import com.eaiselp.common.result.R;
 import com.eaiselp.common.security.RequirePermission;
+import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.data.entity.Artifact;
 import com.eaiselp.data.entity.Case;
@@ -12,6 +15,7 @@ import com.eaiselp.data.entity.Derivation;
 import com.eaiselp.data.service.ArtifactService;
 import com.eaiselp.data.service.CaseService;
 import com.eaiselp.data.service.DerivationService;
+import com.eaiselp.runtime.hierarchy.ProjectProgressService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +42,7 @@ public class CaseController {
     private final DerivationService derivationService;
     private final ArtifactService artifactService;
     private final AuditService auditService;
+    private final ProjectProgressService progressService;   // PRJ-002 T17：删除触发项目进度重算
 
     /** 分页查询 Case，可选按 status 过滤。 */
     @GetMapping
@@ -97,6 +102,36 @@ public class CaseController {
     @RequirePermission("case:view")
     public R<List<Artifact>> artifacts(@PathVariable String caseId) {
         return R.ok(artifactService.listByCaseId(caseId));
+    }
+
+    /**
+     * Case 逻辑删（PRJ-002 T17，AC-F8.3；权限 case:delete，V4 r3 seed 1045）。
+     *
+     * <p>已关联项目的 Case 删除时自动解除挂接（仅置空 project_id 一列，Q7 最小更新）
+     * 并触发该项目进度重算（逻辑删的 Case 不计入分子分母）；Case 本体走 @TableLogic
+     * 逻辑删，产物/派生记录保留可追溯。</p>
+     *
+     * <p>不加事务（同 SE 决策 D-2 口径）：单条 update 自动提交，异步重算提交于
+     * 删除落库之后提交，读到的必然是提交后真值。</p>
+     */
+    @DeleteMapping("/{caseId}")
+    @RequirePermission("case:delete")
+    public R<Void> delete(@PathVariable String caseId) {
+        Case c = caseService.getOne(new LambdaQueryWrapper<Case>().eq(Case::getCaseId, caseId));
+        if (c == null) return R.fail(404, "Case 不存在: " + caseId);
+        Long oldProjectId = c.getProjectId();
+        if (oldProjectId != null) {
+            // 自动解除项目挂接（Q7 最小更新：仅触碰 project_id 一列）
+            caseService.update(new LambdaUpdateWrapper<Case>()
+                    .eq(Case::getId, c.getId())
+                    .set(Case::getProjectId, null));
+            progressService.recalculateAsync(oldProjectId, TenantContext.get());
+        }
+        caseService.removeById(c.getId());
+        auditService.log("case_delete", "case", c.getCaseId(),
+                "{\"title\":\"" + safeJson(c.getTitle()) + "\",\"projectId\":"
+                        + (oldProjectId == null ? "null" : oldProjectId) + "}");
+        return R.ok();
     }
 
     @Data

@@ -4,6 +4,12 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+  # QA 20260818 修复（存量测试基建缺口，非本 case 引入）：主 application.yml 的 Flyway 在 test
+  # profile 必须显式关闭——迁移脚本为 MySQL 专有语法（CREATE DATABASE/反引号），H2（MODE=MySQL）
+  # 无法执行，FlywayAutoConfiguration 抢跑 V1 会导致 @SpringBootTest 上下文启动失败；
+  # H2 建表继续由下方 schema-h2.sql（spring.sql.init）承担。
+  flyway:
+    enabled: false
   sql:
     init:
       mode: always

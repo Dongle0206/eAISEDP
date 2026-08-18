@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.metadata.TableInfo;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.eaiselp.data.entity.Case;
 import com.eaiselp.data.service.CaseService;
+import org.springframework.context.ApplicationEventPublisher;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +33,8 @@ import static org.mockito.Mockito.*;
 class CaseStateServiceImplTest {
 
     @Mock CaseService caseService;
+    /** T16 上行汇总事件发布器（transit 到 done 且关联项目时发布 CaseDoneEvent） */
+    @Mock ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     CaseStateServiceImpl caseStateService;

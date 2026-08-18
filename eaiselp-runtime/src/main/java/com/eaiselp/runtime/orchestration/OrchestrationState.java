@@ -41,6 +41,29 @@ public class OrchestrationState {
     /** 产出验证结果（编排完成后自动运行 CodeValidationService） */
     private CodeValidationSummary validation;
 
+    /**
+     * 下行注入留痕（PRJ-002 F7，AC-F7.1 三处留痕之一）：本次编排实际注入的原则 code 清单
+     * （List&lt;String&gt; 的 JSON 序列化，GovernanceInjectionService 解析结果）。
+     * 批3 T22 接线：runAsync 规划后解析一次写入，persistState 落 t_orchestration.injected_json。
+     */
+    private String injectedPrinciplesJson;
+
+    /**
+     * 治理注入章节文本（T22，SE 决策 D-1）：预渲染的"架构原则与项目约束"最终字符串，
+     * 每步构建 DerivationContext 时复用同一份（一次解析、整条编排快照语义）。
+     * null = 不注入（场景C/解析失败降级）。内存态字段，不持久化——断点续跑时重解析一次重建
+     * （注入内容全局稳定，重解析结果一致，选简单实现；见 runFromStep 注释）。
+     */
+    private String governanceContext;
+
+    /**
+     * 门禁规则快照（T19，SE 决策 D-3）：编排启动一次读全部 enabled 规则（不可变 List），
+     * 整个编排生命周期（含打回回跳/断点续跑）只用快照——规则修改对"新编排"立即生效、
+     * 对"在跑编排"零影响。内存态字段，不持久化：重启恢复的旧记录按步骤已标注的 gate 属性
+     * （steps_json 内 gateRuleId/gateType 等）执行，等价旧行为（SE §11 R2）。
+     */
+    private List<GateRuleSnapshot> gateRules;
+
     private LocalDateTime createdAt;
     private LocalDateTime finishedAt;
 
@@ -87,6 +110,22 @@ public class OrchestrationState {
         private String error;
         /** 编排者给这一步的定制指令（智能规划时 LLM 生成） */
         private String instruction;
+
+        // ---- 质量门禁标注（T19/T20 规则驱动，随 steps_json 持久化，重启恢复据此执行门禁，SE R2）----
+
+        /** 命中的门禁规则 ID（规则快照 id；null = 非门禁步骤） */
+        private Long gateRuleId;
+        /** 门禁类型：llm_review（产出走 GATE:PASS/FAIL 协议）；null = 非门禁步骤 */
+        private String gateType;
+        /** 门禁挂载阶段（post_dev/post_test/pre_deploy），留痕与审批闸 operation 命名用 */
+        private String gateStage;
+        /** 规则级重做上限（null = yml eaiselp.orchestration.gate-max-retries 兜底，PRD F6.4） */
+        private Integer gateMaxRetries;
+        /** 失败动作：block（阻断打回）/ warn（FAIL_WARN 记录放行）；null 视为 block */
+        private String gateFailAction;
+        /** 人工审批闸命中的规则名（逗号分隔；非空 = 该步骤执行前等待人工审批，同 stage 多条已合并，SE R3） */
+        private String approvalRuleNames;
+
         /** 步骤开始时间 */
         private LocalDateTime startedAt;
         /** 步骤完成时间 */

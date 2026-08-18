@@ -7,6 +7,8 @@ import com.eaiselp.adapter.spi.LlmAdapter;
 import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
+import com.eaiselp.runtime.hierarchy.GovernanceInjectionService;
+import com.eaiselp.runtime.hierarchy.QualityGateRuleService;
 import com.eaiselp.runtime.workspace.ArtifactFileService;
 import com.eaiselp.runtime.workspace.CICDTriggerService;
 import com.eaiselp.runtime.workspace.CodeValidationService;
@@ -62,6 +64,10 @@ public class OrchestrationService {
     private final CheckpointService checkpointService;
     private final OrchestrationRecordMapper recordMapper;
     private final com.eaiselp.runtime.workspace.DingTalkNotifier dingTalkNotifier;
+    /** 下行注入解析（PRJ-002 T22，SE 决策 D-1：runAsync 解析一次，每步复用同一份） */
+    private final GovernanceInjectionService governanceInjectionService;
+    /** 门禁规则快照数据源（PRJ-002 T19/T20，SE 决策 D-3：启动一次读全部 enabled 规则） */
+    private final QualityGateRuleService qualityGateRuleService;
 
     /** 不可逆操作（部署）前的检查点等待超时：30 分钟 */
     @Value("${eaiselp.orchestration.approval-timeout-ms:1800000}")
@@ -85,13 +91,13 @@ public class OrchestrationService {
             {"team-ops",      "运维(Ops)",      "deploy"},
     };
 
-    // ======================== 质量门禁（Quality Gate） ========================
+    // ======================== 质量门禁（Quality Gate，规则驱动） ====================
+    // T21/AC-F6.3：原 GATE_ROLES 角色集合常量、isGateStep(role) 角色硬编码、team-ops 检查点
+    // 触发硬编码已全部删除——门禁行为由 t_quality_gate_rule 数据驱动（启动快照 + 附着优先插入兜底，
+    // 见 loadGateSnapshot/applyGateRulesToSteps；默认 seed 三条规则与删前行为逐项等价，SE §6.5）
 
-    /** 门禁角色集合：这些步骤的产出必须含 GATE:PASS/FAIL 判定，FAIL 自动打回重做 */
-    private static final java.util.Set<String> GATE_ROLES = java.util.Set.of(
-            "team-reviewer", "team-qa", "team-security", "team-performance");
-
-    /** 门禁打回重做的最大轮次（超过则编排失败，拒绝部署有问题产出） */
+    /** 门禁打回重做的最大轮次兜底值（超过则编排失败，拒绝部署有问题产出；
+     *  规则级 max_retries 非空时优先用规则值，PRD F6.4） */
     @Value("${eaiselp.orchestration.gate-max-retries:2}")
     private int gateMaxRetries;
 
@@ -134,11 +140,6 @@ public class OrchestrationService {
         return "未提供原因";
     }
 
-    /** 判断步骤是否为门禁角色。 */
-    static boolean isGateStep(String role) {
-        return GATE_ROLES.contains(role);
-    }
-
     /** 找门禁步骤应打回的上游步骤索引（最近的 code 类型步骤，通常为 Dev）。 */
     static int findRerunTarget(List<OrchestrationState.StepResult> steps, int gateIndex) {
         for (int i = gateIndex - 1; i >= 0; i--) {
@@ -146,6 +147,244 @@ public class OrchestrationService {
         }
         // 无 code 步骤时打回门禁前一步
         return Math.max(0, gateIndex - 1);
+    }
+
+    // ==================== 门禁规则化（PRJ-002 T19/T20，SE §6 决策 D-3） ====================
+
+    /**
+     * 加载门禁规则快照（T19）：编排启动一次读全部 enabled 规则（listEnabledByStage(null)，
+     * priority 升序），映射为不可变 {@link GateRuleSnapshot} 列表——整个编排生命周期只用它
+     * （含打回回跳/断点续跑），运行期不缓存、不再查库（快照语义，AC-F6.2）。
+     *
+     * <p>降级：读取异常 → 空快照 + WARN，编排不中断（等价"无门禁规则"的保守放行，SE R5 同源语义）。</p>
+     */
+    List<GateRuleSnapshot> loadGateSnapshot(Long tenantId) {
+        try {
+            // TenantContext 已在 runAsync 开头 set，拦截器自动注入租户过滤（F-3/R4）
+            List<GateRuleSnapshot> snapshot = qualityGateRuleService.listEnabledByStage(null).stream()
+                    .map(GateRuleSnapshot::from)
+                    .toList();   // Stream.toList() 不可变——快照生命周期内不可篡改
+            log.info("[Orchestration][Gate] 门禁规则快照加载 tenantId={}, 规则数={}, 明细={}",
+                    tenantId, snapshot.size(),
+                    snapshot.stream().map(r -> r.name() + "[" + r.gateType() + "/" + r.stage() + "]").toList());
+            return snapshot;
+        } catch (Exception e) {
+            log.warn("[Orchestration][Gate] 门禁规则快照加载失败（降级为无门禁规则，保守放行不阻塞编排）tenantId={}",
+                    tenantId, e);
+            return List.of();
+        }
+    }
+
+    /**
+     * 规则 → 步骤绑定（T19/T20，SE §6.3"附着优先、插入兜底"）。
+     *
+     * <p>按 stage 边界把启用规则挂到步骤上（边界基于步骤产物类型探测，规划完成后计算）：</p>
+     * <ul>
+     *   <li><b>llm_review</b>：边界紧邻处（边界位置或其前一步，就近先查）存在同 gate_role
+     *       且未挂规则的步骤 → <b>附着</b>（标注 gateType/gateRuleId/maxRetries/failAction，
+     *       执行时追加 GATE 判定要求——默认 FAST_PIPELINE 的 reviewer（边界位置）/qa（边界前一步）
+     *       恰好命中附着，与改造前 GATE_ROLES 行为逐项等价且 token 不翻倍）；否则 <b>插入</b>
+     *       一个门禁步骤（智能规划精简掉该角色时，企业治理强制生效）</li>
+     *   <li><b>human_approval</b>：在边界步骤上标记审批闸（不新增步骤；同 stage 多条合并为
+     *       一次等待，防多次 30 分钟阻塞，SE R3）</li>
+     *   <li><b>auto_check</b>：不标注步骤（收尾 Git commit 前统一分发，见 dispatchAutoCheckGates）</li>
+     * </ul>
+     *
+     * <p>边界不存在（LLM 规划出无 code/test/deploy 步骤的精简流水线，SE R10）→ 该规则跳过 +
+     * WARN 留痕（保守放行）。插入会重排 index 并使后续边界右移——逐 stage 处理且每条规则
+     * 实时重算边界，天然消化位移。</p>
+     */
+    void applyGateRulesToSteps(OrchestrationState state, List<GateRuleSnapshot> rules) {
+        if (rules == null || rules.isEmpty()) {
+            return;
+        }
+        // stage 处理顺序固定（post_dev → post_test → pre_deploy）：靠前的插入使靠后的边界
+        // 右移，实时重算保证挂载位置始终正确
+        for (String stage : List.of("post_dev", "post_test", "pre_deploy")) {
+            List<GateRuleSnapshot> stageRules = rules.stream()
+                    .filter(r -> stage.equalsIgnoreCase(r.stage()))
+                    .toList();
+            if (stageRules.isEmpty()) {
+                continue;
+            }
+            for (GateRuleSnapshot rule : stageRules) {
+                int boundary = stageBoundary(state.getSteps(), stage);   // 实时重算（前序插入已右移）
+                if (boundary < 0) {
+                    log.warn("[Orchestration][Gate] 规则[{}]挂载阶段 {} 无对应边界步骤（流水线无该类型产物），"
+                            + "规则跳过（保守放行，SE R10）caseId={}",
+                            rule.name(), stage, state.getCaseId());
+                    continue;
+                }
+                if (rule.isLlmReview()) {
+                    attachOrInsertLlmGate(state, rule, boundary);
+                } else if (rule.isHumanApproval()) {
+                    markApprovalGate(state, rule, boundary);
+                } else if (rule.isAutoCheck()) {
+                    log.info("[Orchestration][Gate] auto_check 规则[{}]登记收尾执行（Git commit 前分发 checkKey={}）caseId={}",
+                            rule.name(), rule.checkKey(), state.getCaseId());
+                } else {
+                    log.warn("[Orchestration][Gate] 未知 gate_type（规则跳过，保守放行）规则={} gateType={}",
+                            rule.name(), rule.gateType());
+                }
+            }
+        }
+    }
+
+    /**
+     * 计算 stage 边界的步骤插入位置（基于步骤产物类型探测）：
+     * post_dev = 最后一个 code 步骤之后；post_test = 最后一个 test 步骤之后；
+     * pre_deploy = 第一个 deploy 步骤处（其前）。
+     *
+     * @return 插入位置索引；-1 = 边界不存在（无对应类型产物步骤）
+     */
+    static int stageBoundary(List<OrchestrationState.StepResult> steps, String stage) {
+        if (steps == null || steps.isEmpty()) {
+            return -1;
+        }
+        switch (stage == null ? "" : stage.toLowerCase()) {
+            case "post_dev": {
+                int last = -1;
+                for (int i = 0; i < steps.size(); i++) {
+                    if ("code".equals(steps.get(i).getArtifactType())) last = i;
+                }
+                return last < 0 ? -1 : last + 1;
+            }
+            case "post_test": {
+                int last = -1;
+                for (int i = 0; i < steps.size(); i++) {
+                    if ("test".equals(steps.get(i).getArtifactType())) last = i;
+                }
+                return last < 0 ? -1 : last + 1;
+            }
+            case "pre_deploy": {
+                for (int i = 0; i < steps.size(); i++) {
+                    if ("deploy".equals(steps.get(i).getArtifactType())) return i;
+                }
+                return -1;
+            }
+            default:
+                return -1;
+        }
+    }
+
+    /**
+     * llm_review 规则的"附着优先、插入兜底"（SE §6.3）。
+     *
+     * <p>附着窗口 = 边界位置与其前一步（就近）：FAST_PIPELINE 的 team-reviewer 恰在 post_dev
+     * 边界位置（dev 之后第一个步骤）、team-qa 恰在 post_test 边界前一步（qa 自身产出 test 产物，
+     * 边界在其后）——两条 seed 规则均命中附着，与改造前 GATE_ROLES 行为完全等价。
+     * 窗口外不再向前/向后搜索：更远的同角色步骤语义上不属于该边界（SE §6.3"已消费"约束），
+     * 宁可插入也不误挂。</p>
+     */
+    private void attachOrInsertLlmGate(OrchestrationState state, GateRuleSnapshot rule, int boundary) {
+        List<OrchestrationState.StepResult> steps = state.getSteps();
+        // ① 附着优先：边界位置 → 其前一步，就近找同 gate_role 且未挂门禁的步骤
+        for (int idx : new int[]{boundary, boundary - 1}) {
+            if (idx < 0 || idx >= steps.size()) {
+                continue;
+            }
+            OrchestrationState.StepResult cand = steps.get(idx);
+            if (rule.gateRole() != null && rule.gateRole().equals(cand.getRole()) && cand.getGateType() == null) {
+                markGate(cand, rule);
+                log.info("[Orchestration][Gate] 门禁规则附着既有步骤: 规则[{}], 步骤{}({}), stage={}",
+                        rule.name(), idx + 1, cand.getRole(), rule.stage());
+                return;
+            }
+        }
+        // ② 插入兜底：边界前无同角色步骤（智能规划精简掉该角色）→ 插入一个门禁步骤强制生效
+        String gateRole = rule.gateRole() != null ? rule.gateRole() : "team-reviewer";
+        OrchestrationState.StepResult gate = OrchestrationState.StepResult.pending(
+                0, gateRole, OrchestrationState.StepResult.ROLE_LABELS.getOrDefault(gateRole, gateRole), "gate");
+        gate.setInstruction("质量门禁审查（规则：" + rule.name() + "）：请对上游产出按本规则要求进行严格审查。");
+        markGate(gate, rule);
+        steps.add(boundary, gate);
+        reindex(steps);
+        log.info("[Orchestration][Gate] 边界前无同角色步骤，插入门禁步骤: 规则[{}], 角色={}, 位置={}, stage={}",
+                rule.name(), gateRole, boundary + 1, rule.stage());
+    }
+
+    /** 把规则属性标注到步骤上（附着与插入共用）。 */
+    private static void markGate(OrchestrationState.StepResult step, GateRuleSnapshot rule) {
+        step.setGateRuleId(rule.id());
+        step.setGateType(rule.gateType());
+        step.setGateStage(rule.stage());
+        step.setGateMaxRetries(rule.maxRetries());
+        step.setGateFailAction(rule.failAction());
+    }
+
+    /**
+     * human_approval 审批闸标记（不新增步骤）：挂在边界位置的首个步骤上（pre_deploy = 第一个
+     * deploy 步骤，执行前等待审批）；同 stage 多条规则合并为一次等待（规则名顿号拼接，SE R3）。
+     */
+    private void markApprovalGate(OrchestrationState state, GateRuleSnapshot rule, int boundary) {
+        List<OrchestrationState.StepResult> steps = state.getSteps();
+        if (boundary >= steps.size()) {
+            // post_dev/post_test 边界恰在流水线末尾（其后无步骤可拦）→ 无可挂载点，跳过 + WARN
+            log.warn("[Orchestration][Gate] 人工审批规则[{}]边界在流水线末尾（其后无步骤），规则跳过（保守放行）caseId={}",
+                    rule.name(), state.getCaseId());
+            return;
+        }
+        OrchestrationState.StepResult step = steps.get(boundary);
+        step.setApprovalRuleNames(step.getApprovalRuleNames() == null
+                ? rule.name()
+                : step.getApprovalRuleNames() + "、" + rule.name());   // 同 stage 合并一次等待
+        if (step.getGateStage() == null) {
+            step.setGateStage(rule.stage());
+        }
+        log.info("[Orchestration][Gate] 人工审批闸标记: 规则[{}], 挂到步骤{}({})执行前, stage={}",
+                rule.name(), boundary + 1, step.getRole(), rule.stage());
+    }
+
+    /** 插入步骤后重排序号（index 从 1 连续）。 */
+    private static void reindex(List<OrchestrationState.StepResult> steps) {
+        for (int i = 0; i < steps.size(); i++) {
+            steps.get(i).setIndex(i + 1);
+        }
+    }
+
+    /**
+     * auto_check 门禁分发（T20，SE §6.4）：收尾 Git commit/push 前按 check_key 执行。
+     *
+     * <p>check_key → 检查器注册表（本期仅一项）：code_validation → 复用无条件执行的
+     * {@code CodeValidationService.validateWorkspace} 结果（state.validation）。allPassed=false
+     * 且 fail_action=block → 编排终判失败（调用方不 commit/push/不触发 CI，AC-F6.6）；
+     * warn → FAIL 告警放行。新增检查器 = 新增注册项（Map 分发，不留 if-else 硬编码生长点）。</p>
+     *
+     * @return true = 存在 block 规则未通过，必须阻断 Git 落地
+     */
+    private boolean dispatchAutoCheckGates(OrchestrationState state) {
+        List<GateRuleSnapshot> rules = state.getGateRules() == null ? List.of() : state.getGateRules();
+        boolean blocked = false;
+        for (GateRuleSnapshot rule : rules) {
+            if (!rule.isAutoCheck()) {
+                continue;
+            }
+            if (!"code_validation".equalsIgnoreCase(rule.checkKey())) {
+                // 未知 check_key：无注册检查器，保守放行 + WARN 留痕（与 R5/R10 同源语义）
+                log.warn("[Orchestration][Gate] auto_check 规则[{}]的 check_key={} 无对应检查器，跳过（保守放行）caseId={}",
+                        rule.name(), rule.checkKey(), state.getCaseId());
+                continue;
+            }
+            OrchestrationState.CodeValidationSummary summary = state.getValidation();
+            if (summary == null) {
+                // 验证未产出结果（基础设施异常）：无法判定 → 告警放行留痕，不因检查设施故障阻断交付
+                log.warn("[Orchestration][Gate] auto_check 规则[{}]无验证结果可用（验证异常？），放行留痕 caseId={}",
+                        rule.name(), state.getCaseId());
+                continue;
+            }
+            if (summary.isAllPassed()) {
+                log.info("[Orchestration][Gate] auto_check 通过: 规则[{}], {}/{} 文件验证通过 caseId={}",
+                        rule.name(), summary.getPassedFiles(), summary.getTotalFiles(), state.getCaseId());
+            } else if (rule.isWarnAction()) {
+                log.warn("[Orchestration][Gate] auto_check 未通过但 fail_action=warn，放行: 规则[{}], {}/{} 通过 caseId={}",
+                        rule.name(), summary.getPassedFiles(), summary.getTotalFiles(), state.getCaseId());
+            } else {
+                blocked = true;
+                log.error("[Orchestration][Gate] auto_check 阻断（fail_action=block）: 规则[{}], {}/{} 通过 caseId={}",
+                        rule.name(), summary.getPassedFiles(), summary.getTotalFiles(), state.getCaseId());
+            }
+        }
+        return blocked;
     }
 
     /**
@@ -204,6 +443,7 @@ public class OrchestrationService {
             r.setApprovalMessage(state.getApprovalMessage());
             r.setStepsJson(OM.writeValueAsString(state.getSteps()));
             r.setValidationJson(state.getValidation() != null ? OM.writeValueAsString(state.getValidation()) : null);
+            r.setInjectedPrinciplesJson(state.getInjectedPrinciplesJson());
             r.setCreatedAt(state.getCreatedAt());
             r.setFinishedAt(state.getFinishedAt());
             // upsert：存在则 update，不存在则 insert
@@ -212,6 +452,33 @@ public class OrchestrationService {
             else recordMapper.updateById(r);
         } catch (Exception e) {
             log.warn("[Orchestration] 状态持久化失败 id={}（不阻塞）: {}", state.getId(), e.getMessage());
+        }
+    }
+
+    /**
+     * 解析下行注入并写入编排状态（T22，SE 决策 D-1）。
+     *
+     * <p>一次解析、整条编排复用：预渲染章节文本（含标题）存 {@code state.governanceContext}，
+     * 原则 code 清单序列化存 {@code state.injectedPrinciplesJson}（AC-F7.1 三处留痕：
+     * ①LLM 上下文章节 ②t_orchestration.injected_json ③服务端日志——本方法补编排侧 INFO 摘要，
+     * 解析链路日志由 GovernanceInjectionService 输出）。</p>
+     *
+     * <p>降级（AC-F7 硬约束）：resolveInjection 内部已 catch 全部异常返回空结果；本方法再包一层
+     * try-catch 防 JSON 序列化意外——任何失败 = 空注入 + WARN，编排不中断。</p>
+     */
+    private void resolveGovernanceInjection(OrchestrationState state, Long tenantId) {
+        try {
+            GovernanceInjectionService.InjectionResult inj =
+                    governanceInjectionService.resolveInjection(state.getCaseId(), tenantId);
+            state.setGovernanceContext(inj.getGovernanceText());   // null/blank = 整体省略章节（空标题禁止）
+            state.setInjectedPrinciplesJson(OM.writeValueAsString(inj.getInjectedPrinciples()));
+            log.info("[Orchestration][Inject] 下行注入完成 id={}, caseId={}, 注入原则={}, 字符={}, 截断={}",
+                    state.getId(), state.getCaseId(), inj.getInjectedPrinciples(),
+                    inj.getRenderedChars(), inj.isTruncated());
+        } catch (Exception e) {
+            state.setGovernanceContext(null);
+            log.warn("[Orchestration][Inject] 下行注入解析异常（降级为无注入，不阻塞编排）id={}, caseId={}",
+                    state.getId(), state.getCaseId(), e);
         }
     }
 
@@ -238,8 +505,22 @@ public class OrchestrationService {
         // ★ 智能规划（#2 编排智能化）：用 team-orchestrator LLM 分析需求动态生成流水线
         // 规划失败降级为默认 fast 流水线（start 时已预填）
         boolean planned = planPipelineWithLlm(state);
+
+        // ★ T22 下行注入（SE 决策 D-1）：智能规划后、循环前解析一次（caseId→project→原则），
+        //   预渲染章节文本存入 state，每步构建 DerivationContext 时复用同一份；
+        //   失败降级为空注入 + WARN，绝不中断编排（AC-F7）
+        resolveGovernanceInjection(state, tenantId);
+
+        // ★ T19/T20 门禁规则快照 + 步骤绑定（SE 决策 D-3）：启动时一次读全部 enabled 规则
+        //   （不可变快照，整个编排生命周期只用它）；"附着优先、插入兜底"挂到步骤（§6.3），
+        //   门禁行为从此数据驱动（替换 GATE_ROLES/team-ops 检查点硬编码，AC-F6.3）
+        List<GateRuleSnapshot> gateRules = loadGateSnapshot(tenantId);
+        state.setGateRules(gateRules);
+        applyGateRulesToSteps(state, gateRules);
+
         List<OrchestrationState.StepResult> steps = state.getSteps();
         int total = steps.size();
+        persistState(state, tenantId);   // 规划+注入+门禁标注后的首个完整快照落库
         if (planned) {
             log.info("[Orchestration] 智能规划成功 id={}, 步骤数={}", id, total);
         } else {
@@ -262,21 +543,32 @@ public class OrchestrationService {
             stepResult.setStartedAt(LocalDateTime.now());
 
             try {
-                // ★ 检查点人工锁（可靠性治理：不可逆操作前必须人工确认）
-                // 部署类步骤（team-ops）执行前暂停，等待检查点审批
-                if ("team-ops".equals(role)) {
+                // ★ T20 人工审批门禁（human_approval 规则驱动，SE §6.4，承接原 team-ops 硬编码
+                //   检查点，AC-F6.5 复用检查点页面与 30 分钟超时）：本步骤被规则标记为审批闸
+                //   （同 stage 多条 human_approval 已在 applyGateRulesToSteps 合并为一次等待，SE R3）
+                //   → 执行前暂停等待人工审批
+                if (stepResult.getApprovalRuleNames() != null && !stepResult.getApprovalRuleNames().isBlank()) {
                     ApprovalDecision decision = awaitApproval(state, stepResult);
                     if (decision == ApprovalDecision.REJECTED || decision == ApprovalDecision.TIMEOUT) {
-                        // 拒绝/超时 → 跳过部署步骤，编排继续收尾（其他步骤成果保留）
+                        // 拒绝/超时 → 跳过本步骤及其后所有 deploy 类步骤（等价原"跳过部署"，
+                        // 其余步骤成果保留），编排继续收尾
                         stepResult.setStatus("skipped");
                         stepResult.setError(decision == ApprovalDecision.REJECTED
-                                ? "检查点被拒绝，跳过部署" : "审批超时（30分钟），跳过部署");
+                                ? "人工审批门禁被拒绝，跳过部署" : "审批超时（30分钟），跳过部署");
                         stepResult.setFinishedAt(LocalDateTime.now());
+                        for (int j = i + 1; j < total; j++) {
+                            if ("deploy".equals(steps.get(j).getArtifactType())
+                                    && "pending".equals(steps.get(j).getStatus())) {
+                                steps.get(j).setStatus("skipped");
+                                steps.get(j).setError("人工审批门禁未通过，部署步骤不执行");
+                            }
+                        }
                         state.setCurrentRole(null);
-                        log.warn("[Orchestration] 部署步骤被跳过 id={}, 原因={}", id, decision);
+                        log.warn("[Orchestration][Gate] 人工审批未通过，跳过部署 id={}, 规则={}, 原因={}",
+                                id, stepResult.getApprovalRuleNames(), decision);
                         i++; continue;
                     }
-                    // approved → 继续执行部署
+                    // approved → 继续执行该步骤
                 }
 
                 // 获取角色定义
@@ -296,8 +588,9 @@ public class OrchestrationService {
                             + state.getPendingGateFeedback();
                     state.setPendingGateFeedback(null);   // 用后清空
                 }
-                // 门禁角色追加判定格式要求
-                boolean isGate = isGateStep(role);
+                // 门禁判定格式要求（T19：规则驱动——步骤被 llm_review 规则附着/插入即门禁步骤，
+                // 与原 GATE_ROLES 行为等价：默认 seed 下同为 reviewer/qa 两步追加同一 SUFFIX）
+                boolean isGate = "llm_review".equals(stepResult.getGateType());
                 if (isGate) instruction += GATE_INSTRUCTION_SUFFIX;
 
                 DerivationContext ctx = DerivationContext.builder()
@@ -305,6 +598,7 @@ public class OrchestrationService {
                         .stage(artifactType)
                         .upstreamArtifacts(upstreamArtifacts.isEmpty() ? null : new HashMap<>(upstreamArtifacts))
                         .extraInstructions(instruction)
+                        .governanceContext(state.getGovernanceContext())   // T22：每步复用同一份注入快照
                         .build();
 
                 log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}{}", i + 1, total, role, state.getCaseId(),
@@ -313,21 +607,31 @@ public class OrchestrationService {
                 // 同步调用 engine.derive（在异步线程内阻塞等待 LLM 返回）
                 DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);
 
-                // ★ 质量门禁判定：解析 GATE:PASS/FAIL
+                // ★ 质量门禁判定：解析 GATE:PASS/FAIL（T19 规则驱动，SE §6.4 llm_review 分派）
                 if (isGate && result != null && result.getOutput() != null) {
                     String gate = parseGateResult(result.getOutput());
                     if ("FAIL".equals(gate)) {
                         String reason = extractGateReason(result.getOutput());
+                        // 规则级失败动作：warn → FAIL_WARN 记录放行（SE §6.4；block/空 → 打回/终判）
+                        if (stepResult.getGateFailAction() != null
+                                && "warn".equalsIgnoreCase(stepResult.getGateFailAction())) {
+                            stepResult.setGateResult("FAIL_WARN");
+                            stepResult.setGateReason(reason);
+                            log.warn("[Orchestration][Gate] 门禁 FAIL 但 fail_action=warn，记录放行 id={}, gate={}, 规则={}, 原因={}",
+                                    id, role, stepResult.getGateRuleId(), reason);
+                        } else {
+                        int maxRetries = stepResult.getGateMaxRetries() != null
+                                ? stepResult.getGateMaxRetries() : gateMaxRetries;   // 规则级优先，null 走 yml 兜底（PRD F6.4）
                         int rerun = gateRerunCounts.merge(i, 1, Integer::sum);
-                        if (rerun > gateMaxRetries) {
+                        if (rerun > maxRetries) {
                             // 超过重做上限 → 门禁终判失败，编排终止（拒绝部署有问题产出）
                             stepResult.setStatus("failed");
                             stepResult.setGateResult("FAIL");
                             stepResult.setGateReason(reason);
-                            stepResult.setError("质量门禁 " + gateMaxRetries + " 轮重做后仍未通过: " + reason);
+                            stepResult.setError("质量门禁 " + maxRetries + " 轮重做后仍未通过: " + reason);
                             stepResult.setFinishedAt(LocalDateTime.now());
-                            log.warn("[Orchestration] 质量门禁终判失败 id={}, gate={}, 轮次={}, 原因={}",
-                                    id, role, rerun - 1, reason);
+                            log.warn("[Orchestration][Gate] 质量门禁终判失败 id={}, gate={}, 规则={}, 轮次={}, 原因={}",
+                                    id, role, stepResult.getGateRuleId(), rerun - 1, reason);
                             // 后续步骤全部标记 skipped（不部署有问题产出）
                             for (int j = i + 1; j < total; j++) {
                                 steps.get(j).setStatus("skipped");
@@ -335,28 +639,32 @@ public class OrchestrationService {
                             }
                             break;
                         }
-                        // 打回重做：审查意见存入 pendingGateFeedback，回退到上游 code 步骤
+                        // 打回重做：审查意见存入 pendingGateFeedback，回退到 stage 边界对应的上游步骤
                         stepResult.setGateResult("FAIL");
                         stepResult.setGateReason(reason);
                         stepResult.setRerunCount(rerun);
                         state.setPendingGateFeedback(reason);
+                        // 打回目标按规则的 stage 边界计算：post_dev/post_test/pre_deploy 一律打回
+                        // 门禁前最后一个 code 步骤（findRerunTarget 即"最近的 code 类型步骤"）——
+                        // 与改造前打回 Dev 的行为逐项等价（SE §6.5 等价表第 1 行）
                         int target = findRerunTarget(steps, i);
                         steps.get(target).setRerunCount(steps.get(target).getRerunCount() + 1);
-                        log.warn("[Orchestration] 质量门禁 FAIL 打回重做 id={}, gate={}, 第{}轮, 打回到步骤{} ({}), 原因={}",
-                                id, role, rerun, target + 1, steps.get(target).getRole(), reason);
+                        log.warn("[Orchestration][Gate] 质量门禁 FAIL 打回重做 id={}, gate={}, 规则={}, 第{}轮, 打回到步骤{} ({}), 原因={}",
+                                id, role, stepResult.getGateRuleId(), rerun, target + 1, steps.get(target).getRole(), reason);
                         // 重置打回步骤为 pending（本门禁步骤也重置）
                         steps.get(target).setStatus("pending");
                         stepResult.setStatus("pending");
                         i = target;   // 回跳
                         persistState(state, tenantId);
                         continue;
+                        }
                     }
-                    // PASS（或 LLM 忘输出判定视为 PASS 放行并告警）
+                    // PASS（或 LLM 忘输出判定视为 PASS 放行并告警——现状语义保留）
                     stepResult.setGateResult("PASS");
                     if (gate == null) {
-                        log.warn("[Orchestration] 门禁角色 {} 未输出 GATE 判定标记，视为 PASS 放行（建议检查 prompt）", role);
+                        log.warn("[Orchestration][Gate] 门禁角色 {} 未输出 GATE 判定标记，视为 PASS 放行（建议检查 prompt）", role);
                     } else {
-                        log.info("[Orchestration] 质量门禁 PASS: {} (caseId={})", role, state.getCaseId());
+                        log.info("[Orchestration][Gate] 质量门禁 PASS: {} (caseId={})", role, state.getCaseId());
                     }
                 }
 
@@ -456,16 +764,31 @@ public class OrchestrationService {
                     log.warn("[Orchestration] 产出验证失败（不阻塞）", ve);
                 }
 
-                String commitMsg = "eAISEDP 编排产出: " + state.getCaseId()
-                        + " (成功" + success + "/" + state.totalSteps() + ")";
-                String commitHash = gitService.commitWorkspace(state.getCaseId(), commitMsg);
-                if (commitHash != null) {
-                    log.info("[Orchestration] Git commit 成功: {} → {}", state.getCaseId(), commitHash.substring(0, 8));
-                    // 远程推送（配置了远程地址才 push）
-                    gitService.pushWorkspace(state.getCaseId());
-                    // CI/CD 触发（配置了 Webhook URL 才触发，适配 Jenkins/GitLab/GitHub/Gitea 等）
-                    var files = artifactFileService.listFiles(state.getCaseId());
-                    cicdTriggerService.triggerBuild(state.getCaseId(), commitHash, files, state.getRequirement());
+                // ★ T20 auto_check 门禁（SE §6.4）：收尾 Git commit/push 前按 check_key 分发执行
+                //   （本期注册表仅 code_validation → CodeValidationService.validateWorkspace，其结果
+                //   上面已算好存 state.validation，这里直接消费）。无 auto_check 规则时验证仍执行
+                //   （现状行为）——验证=总跑+记录，auto_check 规则=是否阻断的治理决策，升级等价由此保持
+                boolean gateBlocked = dispatchAutoCheckGates(state);
+                if (gateBlocked) {
+                    // fail_action=block 且未通过 → 编排终判失败：不 commit/push/不触发 CI（AC-F6.6）
+                    state.setStatus("failed");
+                    persistState(state, tenantId);
+                    log.error("[Orchestration][Gate] auto_check 门禁阻断：不 commit/push/不触发 CI id={}, caseId={}",
+                            id, state.getCaseId());
+                }
+
+                if (!gateBlocked) {
+                    String commitMsg = "eAISEDP 编排产出: " + state.getCaseId()
+                            + " (成功" + success + "/" + state.totalSteps() + ")";
+                    String commitHash = gitService.commitWorkspace(state.getCaseId(), commitMsg);
+                    if (commitHash != null) {
+                        log.info("[Orchestration] Git commit 成功: {} → {}", state.getCaseId(), commitHash.substring(0, 8));
+                        // 远程推送（配置了远程地址才 push）
+                        gitService.pushWorkspace(state.getCaseId());
+                        // CI/CD 触发（配置了 Webhook URL 才触发，适配 Jenkins/GitLab/GitHub/Gitea 等）
+                        var files = artifactFileService.listFiles(state.getCaseId());
+                        cicdTriggerService.triggerBuild(state.getCaseId(), commitHash, files, state.getRequirement());
+                    }
                 }
             } catch (Exception ge) {
                 log.warn("[Orchestration] Git 落地失败（不阻塞流程）", ge);
@@ -499,6 +822,8 @@ public class OrchestrationService {
             if (r.getValidationJson() != null) {
                 restored.setValidation(OM.readValue(r.getValidationJson(), OrchestrationState.CodeValidationSummary.class));
             }
+            // 注入清单留痕恢复（governanceContext 不落库：断点续跑时按需重解析重建，见 runFromStep）
+            restored.setInjectedPrinciplesJson(r.getInjectedPrinciplesJson());
             // 服务重启后 running 态的编排线程已死，标记为 failed（成果在产物/工作区可查）
             if ("running".equals(restored.getStatus()) || "awaiting_approval".equals(restored.getStatus())) {
                 restored.setStatus("failed");
@@ -647,6 +972,11 @@ public class OrchestrationService {
         if (state == null) return;
         TenantContext.set(tenantId);
         state.setStatus("running");
+        // T22 复用注入快照：内存态已有（首次编排解析过）则直接复用同一份；缺失（重启恢复的旧记录，
+        // governanceContext 不落库）则重解析一次重建——注入内容全局稳定，重解析结果一致，选简单实现
+        if (state.getGovernanceContext() == null) {
+            resolveGovernanceInjection(state, tenantId);
+        }
         // 从产物重建 upstreamArtifacts（前面已成功步骤的产出）
         Map<String, String> upstreamArtifacts = rebuildUpstreamFromArtifacts(state, fromStep);
         List<OrchestrationState.StepResult> steps = state.getSteps();
@@ -709,11 +1039,17 @@ public class OrchestrationService {
             String instruction = (stepResult.getInstruction() != null && !stepResult.getInstruction().isBlank())
                     ? stepResult.getInstruction()
                     : "这是流水线编排的第 " + (i + 1) + " 步（共 " + total + " 步）。请基于需求和上游产出，产出你的专业内容。";
+            // 门禁步骤追加判定格式要求（T19：与主流程同一 SUFFIX，保证重试产物形状含 GATE 判定；
+            // 重试路径不解析判定/不等待审批——既有断点续跑语义，不在本次等价改造范围内变更）
+            if ("llm_review".equals(stepResult.getGateType())) {
+                instruction += GATE_INSTRUCTION_SUFFIX;
+            }
             DerivationContext ctx = DerivationContext.builder()
                     .task(state.getRequirement())
                     .stage(artifactType)
                     .upstreamArtifacts(upstreamArtifacts.isEmpty() ? null : new HashMap<>(upstreamArtifacts))
                     .extraInstructions(instruction)
+                    .governanceContext(state.getGovernanceContext())   // T22：重试路径同样复用注入快照
                     .build();
             log.info("[Orchestration] 步骤 {}/{} 派生: role={}, case={}", i + 1, total, role, state.getCaseId());
             DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);
@@ -754,6 +1090,11 @@ public class OrchestrationService {
     /**
      * 创建检查点并等待人工审批（可靠性治理：不可逆操作人工锁）。
      *
+     * <p>T20 门禁规则化改造：触发条件从"team-ops 角色硬编码"改为 human_approval 规则的
+     * 审批闸标记（stepResult.approvalRuleNames 非空），检查点 operation 带规则 stage
+     * （orchestration_gate_{stage}_{orchId}），消息注明命中的规则名（SE §6.4）；
+     * 等待/超时/降级语义与改造前完全一致（30 分钟轮询、拒绝跳过部署、检查点服务异常降级放行）。</p>
+     *
      * <p>编排状态转为 {@code awaiting_approval}，前端轮询可见并提示去检查点审批页操作。
      * 每 5 秒轮询检查点状态，最长等 {@code approval-timeout-ms}（默认 30 分钟）。</p>
      *
@@ -763,14 +1104,16 @@ public class OrchestrationService {
      */
     private ApprovalDecision awaitApproval(OrchestrationState state, OrchestrationState.StepResult stepResult) {
         try {
-            // 1. 创建 pending 检查点
+            String stage = stepResult.getGateStage() != null ? stepResult.getGateStage() : "pre_deploy";
+            // 1. 创建 pending 检查点（operation 带规则 stage，SE §6.4：orchestration_gate_{stage}_{orchId}）
             Checkpoint cp = checkpointService.create(
-                    state.getCaseId(), "orchestration_deploy_" + state.getId(), null);
+                    state.getCaseId(), "orchestration_gate_" + stage + "_" + state.getId(), null);
 
-            // 2. 编排状态 → awaiting_approval（前端可见）
+            // 2. 编排状态 → awaiting_approval（前端可见），消息注明命中的门禁规则名
             state.setStatus("awaiting_approval");
             state.setPendingCheckpointId(cp.getId());
-            state.setApprovalMessage("部署为不可逆操作，等待人工审批（检查点 #" + cp.getId()
+            state.setApprovalMessage("命中人工审批门禁规则：" + stepResult.getApprovalRuleNames()
+                    + "。部署为不可逆操作，等待人工审批（检查点 #" + cp.getId()
                     + "）。请到「检查点审批」页面确认或拒绝。30 分钟无审批自动跳过。");
             persistState(state, TenantContext.get() != null ? TenantContext.get() : 0L);   // 审批等待持久化
             log.info("[Orchestration] 等待部署审批 id={}, checkpointId={}", state.getId(), cp.getId());

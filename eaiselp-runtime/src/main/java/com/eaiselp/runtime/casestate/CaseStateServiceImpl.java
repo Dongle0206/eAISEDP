@@ -2,19 +2,28 @@ package com.eaiselp.runtime.casestate;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.data.entity.Case;
 import com.eaiselp.data.service.CaseService;
+import com.eaiselp.runtime.hierarchy.CaseDoneEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 /**
- * {@link CaseStateService} 实现：基于 {@link CaseService}（MyBatis-Plus）读写 t_case。
+ * {@link CaseStateService} 实现：基于 {@code CaseService}（MyBatis-Plus）读写 t_case。
  *
  * <p>多租户隔离：依赖 MyBatis-Plus 租户拦截器自动注入 tenant_id 过滤（ES-003 §9.3，G13），
  * 本实现不在 SQL 里手写 tenant_id 条件。
  *
  * <p>更新策略：用 LambdaUpdateWrapper 精准 SET status + update_by，避免全字段 update 覆盖并发写入。
+ *
+ * <p>上行汇总（PRJ-002 F8/T16，SE 决策 D-2）：流转成功且目标=done 且 Case 关联项目时发布
+ * {@link CaseDoneEvent}，由 ProjectProgressListener 异步重算项目进度。本实现只依赖 Spring 事件
+ * 发布器与 hierarchy 包的事件 POJO（数据类非服务），不 import 汇总服务——casestate 是 L1
+ * 基础设施，不得感知 L2 汇总实现存在（P12/P3 单向依赖）。发布全程 try-catch：失败仅记 ERROR，
+ * 绝不影响状态机（AC-F8.4）。
  */
 @Slf4j
 @Service
@@ -22,6 +31,8 @@ import org.springframework.stereotype.Service;
 public class CaseStateServiceImpl implements CaseStateService {
 
     private final CaseService caseService;
+    /** 上行汇总事件发布器（D-2：事件解耦，汇总失败不可能沿调用栈打断 transit） */
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     public Case transit(String caseId, CaseStatus target, String operator) {
@@ -60,6 +71,19 @@ public class CaseStateServiceImpl implements CaseStateService {
         }
         log.info("[CaseState] 流转成功 caseId={} {} → {} by={}",
                 caseId, current.dbValue(), target.dbValue(), operator);
+        // ★ T16/F8 上行汇总：目标=done 且关联项目 → 发布 CaseDoneEvent（异步重算项目进度）。
+        //   try-catch 包裹：发布失败只记 ERROR，不影响状态机（AC-F8.4 硬约束）
+        if (target == CaseStatus.DONE && c.getProjectId() != null) {
+            try {
+                Long tenantId = c.getTenantId() != null ? c.getTenantId() : TenantContext.get();
+                eventPublisher.publishEvent(new CaseDoneEvent(caseId, c.getProjectId(), tenantId));
+                log.info("[CaseState] CaseDoneEvent 已发布 caseId={}, projectId={}, tenantId={}",
+                        caseId, c.getProjectId(), tenantId);
+            } catch (Exception e) {
+                log.error("[CaseState] CaseDoneEvent 发布失败（不影响状态流转）caseId={}, projectId={}",
+                        caseId, c.getProjectId(), e);
+            }
+        }
         c.setStatus(target.dbValue());
         c.setUpdateBy(operator);
         return c;

@@ -14,6 +14,7 @@ import com.eaiselp.data.mapper.UserMapper;
 import com.eaiselp.data.mapper.UserRoleMapper;
 import com.eaiselp.data.mapper.vo.UserRoleView;
 import com.eaiselp.data.audit.AuditService;
+import com.eaiselp.runtime.hierarchy.TenantProvisionService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,8 @@ public class TenantController {
     private final RoleMapper roleMapper;
     private final QuotaMapper quotaMapper;
     private final AuditService auditService;
+    /** PRJ-002 T18：新租户治理 seed 初始化（六原则+三门禁，失败不阻塞注册） */
+    private final TenantProvisionService tenantProvisionService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder(12);
 
     /**
@@ -110,6 +113,14 @@ public class TenantController {
 
         auditService.log("tenant_register", "tenant", String.valueOf(t.getId()),
                 "{\"tenantName\":\"" + req.getTenantName() + "\",\"admin\":\"" + req.getAdminUsername() + "\"}");
+
+        // 5. PRJ-002 T18：复制租户级治理 seed（六原则+三门禁；R8——迁移 seed 只覆盖存量租户）。
+        // 失败仅 warn 不阻塞注册：注册是体验主路径，seed 是治理增强，可由管理员事后补配。
+        try {
+            tenantProvisionService.provision(t.getId());
+        } catch (Exception e) {
+            log.warn("[Tenant] 新租户治理 seed 初始化失败（不阻塞注册）tenantId={}: {}", t.getId(), e.getMessage());
+        }
 
         log.info("[Tenant] 自助注册成功: {} (admin={}, 租户ID={})", req.getTenantName(), req.getAdminUsername(), t.getId());
         return R.ok(Map.of(

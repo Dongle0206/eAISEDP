@@ -29,3 +29,7 @@
 - [IMP-012] 2026-07-22 | Reviewer D1（可选）：t_derivation.deleted 字段无索引（按 deleted 过滤的查询全表扫描），数据量上来后影响性能 | 状态：M2 待办（logic-delete 字段加索引，迁移脚本幂等）
 - [IMP-013] 2026-07-22 | Reviewer D2（可选）：DerivationPersistenceService 的 artifact JSON 拼接用手工 StringBuilder（M1.2 决策，规避引入 ObjectMapper 依赖），可读性差且易转义错 | 状态：M2 待办（引 ObjectMapper 后改用 writeValueAsString，需评估对 library 模块依赖影响）
 - [IMP-014] 2026-07-22 | 用户反馈：team-orchestrator SKILL.md 第 4 条"不越权执行"过度泛化到调研类活，导致编排者要么过度调研（违反字面），要么机械派子智能体（浪费 token/时间）。SKILL.md 第 4 条与第 82 条"编排者独立抽查"自身矛盾，第 82 条才对。元评估：docs/agent-memory/编排者最佳实践评估.md | 状态：已完成（SKILL.md 4A/4B/4C 落地 + 三处权威源 SHA256 一致：用户级 ~/.zcode + 团队级 agents-config + 评估文档 platform/docs/agent-memory）
+
+### 变更登记（team-pm）
+- 2026-08-18 | 需求 | 三层贯通企业级平台骨架（L3战略→L2项目群/项目→L1 Case 四级联动+下行约束+上行事件） | 平台Owner（dogfooding核心需求） | 新增t_strategy/t_program/t_project/t_architecture_principle/t_quality_gate_rule五表、Case表加project_id外键、三级CRUD API、三级管理页面、编排上下文注入机制、项目进度自动汇总
+- 2026-08-18 | 交付 | 三层贯通骨架交付（237测全绿，联测清单45条待部署机执行）

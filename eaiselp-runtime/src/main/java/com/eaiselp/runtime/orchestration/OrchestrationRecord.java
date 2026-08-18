@@ -1,6 +1,7 @@
 package com.eaiselp.runtime.orchestration;
 
 import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -39,6 +40,17 @@ public class OrchestrationRecord implements Serializable {
 
     /** 产出验证结果摘要 JSON */
     private String validationJson;
+
+    /**
+     * 下行注入清单快照（PRJ-002 F7，AC-F7.1 三处留痕之一）：注入的原则 code 列表
+     * （List&lt;String&gt; 的 JSON）。批2 仅落字段（OrchestrationService 不改），
+     * 写入由批3 persistState 接线。
+     *
+     * <p>注意列名为 <b>injected_json</b>（DBA V4 r2 落盘命名，与 tasks.md 对账结论一致），
+     * 与字段名 injectedPrinciplesJson（批2 任务约定）不一致，用 @TableField 显式映射。</p>
+     */
+    @TableField("injected_json")
+    private String injectedPrinciplesJson;
 
     private LocalDateTime createdAt;
     private LocalDateTime finishedAt;

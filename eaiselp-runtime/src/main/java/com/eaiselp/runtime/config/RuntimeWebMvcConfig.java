@@ -5,6 +5,8 @@ import com.eaiselp.common.ratelimit.RateLimitInterceptor;
 import com.eaiselp.common.security.JwtAuthInterceptor;
 import com.eaiselp.common.security.JwtUtil;
 import com.eaiselp.data.service.PermissionService;
+import com.eaiselp.runtime.hierarchy.LayerGuardInterceptor;
+import com.eaiselp.runtime.hierarchy.TenantLayerService;
 import com.eaiselp.runtime.security.PermissionInterceptor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
@@ -23,6 +25,9 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  *       限流放最前能挡住暴力破解/烧刷，无论是否登录。</li>
  *   <li>order=1 JWT 认证拦截器：所有 /api/** 都要 token（runtime 无公开接口）。</li>
  *   <li>order=2 权限校验拦截器：仅对 @RequiresPermission 标注的方法生效。</li>
+ *   <li>order=3 分层开关守卫拦截器（PRJ-002 T28，批4）：L3 关→/api/v1/strategies/**
+ *       43001；L2 关→/api/v1/programs/**、/api/v1/projects/** 43002（只拦新端点，
+ *       /api/v1/cases/** 与原则/门禁/编排/开关接口不受影响，AC-F10.1/10.3）。</li>
  * </ol>
  */
 @Configuration
@@ -31,15 +36,17 @@ public class RuntimeWebMvcConfig implements WebMvcConfigurer {
     private final JwtUtil jwtUtil;
     private final PermissionService permissionService;
     private final BucketRegistry bucketRegistry;   // M2-DFX：限流桶注册表
+    private final TenantLayerService tenantLayerService;   // PRJ-002 T28：分层开关读取（含本地缓存）
 
     @Value("${eaiselp.web.root:}")
     private String webRoot;
 
     public RuntimeWebMvcConfig(JwtUtil jwtUtil, PermissionService permissionService,
-                               BucketRegistry bucketRegistry) {
+                               BucketRegistry bucketRegistry, TenantLayerService tenantLayerService) {
         this.jwtUtil = jwtUtil;
         this.permissionService = permissionService;
         this.bucketRegistry = bucketRegistry;
+        this.tenantLayerService = tenantLayerService;
     }
 
     @Override
@@ -58,6 +65,12 @@ public class RuntimeWebMvcConfig implements WebMvcConfigurer {
         registry.addInterceptor(new PermissionInterceptor(permissionService))
                 .addPathPatterns("/api/**")
                 .order(2);
+        // 3. 分层开关守卫拦截器（PRJ-002 T28，批4 order=3 裁决：JWT/权限之后）：
+        //    只拦三层贯通新端点前缀，L3 关→43001 / L2 关→43002，HTTP 200 + 业务码（禁 500）。
+        //    SystemManage/Runtime/Case 等存量接口不在此列（AC-F10.3 存量语义零影响）。
+        registry.addInterceptor(new LayerGuardInterceptor(tenantLayerService))
+                .addPathPatterns("/api/v1/strategies/**", "/api/v1/programs/**", "/api/v1/projects/**")
+                .order(3);
     }
 
     @Override
