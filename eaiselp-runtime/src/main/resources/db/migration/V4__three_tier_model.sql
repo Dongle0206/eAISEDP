@@ -1,6 +1,6 @@
 -- V4: 三层贯通数据模型（L3战略 → L2项目群/项目 → L1 Case）
 -- 企业级平台骨架：四级联动 + 下行约束（架构原则/门禁规则）+ 上行事件（进度）
---
+-- 
 -- 修订 r2（2026-08-18，team-dba，评审 PRD v1.0 后）：
 --   1. 新增 t_project_principle 项目-原则关联表（PRD 缺口一/Q3：租户全局默认 + 项目级覆盖，
 --      AC-F3.3/AC-F7.1 的数据载体）
@@ -15,7 +15,7 @@
 --   6. t_quality_gate_rule 增加 uk_gate_tenant_name（规则名租户内唯一：管理页防重 + seed 幂等重放）
 --   7. seed：为存量租户预置六条架构原则（AC-F5.3）+ 门禁规则（AC-F6.1/Q1：与现状 GATE_ROLES
 --      等价，升级行为不变）；新建租户的 seed 由应用层租户初始化负责（见《数据库设计说明》§6）
---
+-- 
 -- 增补 r3（2026-08-18，team-dev，任务 T01/T02）：
 --   8. 权限 seed 增补 14 原子（id 1032~1045）+ 模板角色授权行（id 2058 起，对齐 SE §10 矩阵：
 --      engineer 零新增授权、executive 无 program:edit、project_manager 无 program/principle/gate:edit
@@ -23,7 +23,7 @@
 --   9. 门禁 seed 增补第 3 条规则 c（部署人工审批 human_approval/pre_deploy/block/max_retries=1，
 --      承接 team-ops 部署前检查点硬编码的等价行为，T02 裁决采纳 SE §6.5 等价表——
 --      保证升级后 pre_deploy 审批行为不变，AC-F6.5；r2 的 2 条 a/b 不变）
---
+-- 
 -- 幂等说明（同 V3 约定）：MySQL 8.0 的 ALTER TABLE ADD COLUMN / CREATE INDEX 不支持
 -- IF NOT EXISTS（MariaDB 才支持），Flyway schema history 保证本脚本只执行一次；
 -- 建表语句用 IF NOT EXISTS，seed 用 INSERT IGNORE（唯一键兜底），保证可重放。
@@ -197,7 +197,7 @@ ALTER TABLE `t_tenant`
 -- 注意：蓝图 §7 的 P13 是"落库失败不阻塞主流程"，与战略地图/PRD 的 P13（灵活接入）编号冲突，
 --       本 seed 按 PRD 契约执行，编号冲突待 team-ea 裁决（见《数据库设计说明》§8）。
 -- id 用保留区间 7000000+（租户序号×10 + 原则序号）：避开 V1 权限 seed 的小 ID 与应用层雪花 ID
---（雪花为 19 位十进制数，永不碰撞）。INSERT IGNORE + uk_principle_code 保证重放幂等。
+-- （雪花为 19 位十进制数，永不碰撞）。INSERT IGNORE + uk_principle_code 保证重放幂等。
 -- 新建租户的默认原则由应用层租户初始化复制（迁移只覆盖存量租户，见《数据库设计说明》§6）。
 INSERT IGNORE INTO `t_architecture_principle`
   (`id`, `tenant_id`, `code`, `title`, `content`, `principle_type`, `enforce_level`, `enabled`, `create_by`)
