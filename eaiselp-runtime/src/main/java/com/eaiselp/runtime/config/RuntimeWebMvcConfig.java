@@ -69,10 +69,14 @@ public class RuntimeWebMvcConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**")
                 .order(2);
         // 3. 分层开关守卫拦截器（PRJ-002 T28，批4 order=3 裁决：JWT/权限之后）：
-        //    只拦三层贯通新端点前缀，L3 关→43001 / L2 关→43002，HTTP 200 + 业务码（禁 500）。
+        //    只拦三层贯通端点前缀，L3 关→43001 / L2 关→43002，HTTP 200 + 业务码（禁 500）。
         //    SystemManage/Runtime/Case 等存量接口不在此列（AC-F10.3 存量语义零影响）。
+        //    case-20260818 T20（C6）：L2 组新增 milestones / project-dependencies / metrics
+        //    三前缀（群聚合时间线挂 programs 前缀天然 43002）；adrs / tech-radar / principles
+        //    不限层不注册（AC-SWITCH.2）。前缀组语义与 LayerGuardInterceptor.L2_PREFIXES 一一对应。
         registry.addInterceptor(new LayerGuardInterceptor(tenantLayerService))
-                .addPathPatterns("/api/v1/strategies/**", "/api/v1/programs/**", "/api/v1/projects/**")
+                .addPathPatterns("/api/v1/strategies/**", "/api/v1/programs/**", "/api/v1/projects/**",
+                        "/api/v1/milestones/**", "/api/v1/project-dependencies/**", "/api/v1/metrics/**")
                 .order(3);
     }
 

@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.eaiselp.common.result.R;
 import com.eaiselp.common.security.RequirePermission;
 import com.eaiselp.data.audit.AuditService;
+import com.eaiselp.runtime.hierarchy.AdrService;
 import com.eaiselp.runtime.hierarchy.ArchitecturePrinciple;
 import com.eaiselp.runtime.hierarchy.PrincipleService;
+import com.eaiselp.runtime.hierarchy.dto.AdrVo;
 import com.eaiselp.runtime.hierarchy.dto.BoundProjectVo;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +44,7 @@ public class PrincipleController {
     private static final Set<String> LEVELS = Set.of("must", "should", "may");
 
     private final PrincipleService principleService;
+    private final AdrService adrService;
     private final AuditService auditService;
 
     /** 全量列表（按 code 排序，含停用原则——停用绑定关系保留，需要展示）。 */
@@ -139,6 +142,21 @@ public class PrincipleController {
         auditService.log("principle_bind", "principle", String.valueOf(id),
                 "{\"projectCount\":" + (req.getProjectIds() == null ? 0 : req.getProjectIds().size()) + "}");
         return R.ok(req.getProjectIds() == null ? List.of() : req.getProjectIds());
+    }
+
+    /**
+     * 原则关联 ADR 反查（case-20260818 T17，api-contracts §4 末端点，AC-F4.3 原则侧聚合）：
+     * 按原则 id 载入 code 后反查全部状态 ADR，供原则管理/编辑页"关联的 ADR 列表"区块。
+     *
+     * <p>ADR 属不限层知识资产（AC-SWITCH.2），但本端点挂 principles 前缀（principle:view，
+     * 同为不限层）——与 ADR 端点一样不注册 LayerGuard。</p>
+     */
+    @GetMapping("/{id}/adrs")
+    @RequirePermission("principle:view")
+    public R<List<AdrVo>> relatedAdrs(@PathVariable Long id) {
+        ArchitecturePrinciple ap = principleService.getById(id);
+        if (ap == null) return R.fail(404, "原则不存在: " + id);
+        return R.ok(adrService.listByPrincipleCode(ap.getCode()));
     }
 
     // ------------------------------------------------------------------

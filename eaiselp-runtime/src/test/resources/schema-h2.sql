@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS t_derivation (
   started_at TIMESTAMP,
   finished_at TIMESTAMP,
   duration_ms BIGINT,
+  -- V5 F1 DORA 埋点列（case-20260818 T1）：PASS/FAIL/FAIL_WARN；NULL=埋点上线前历史
+  gate_result VARCHAR(16),
   create_time TIMESTAMP,
   update_time TIMESTAMP,
   create_by VARCHAR(64),

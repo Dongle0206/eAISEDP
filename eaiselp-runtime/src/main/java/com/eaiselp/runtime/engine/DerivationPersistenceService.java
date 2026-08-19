@@ -89,6 +89,11 @@ public class DerivationPersistenceService {
             derivationService.save(d);
         }
 
+        // case-20260818 T1（V5 F1 DORA 埋点数据链）：两路径统一回填 derivationId 到内存结果对象，
+        // 供编排层门禁埋点 markGateResult(derivationId, gate) 精准 UPDATE（SE §4.4——不采用
+        // WHERE case_id+role LIMIT 1 的竞态写法）。落库失败时本行不可达，result.derivationId 保持 null。
+        result.setDerivationId(d.getId());
+
         // 2. 构建并批量保存 Artifacts（derivation_id 关联）
         //    产物行本就独立于 derivation 行（每次派生新产物），无论同步/异步都走 INSERT。
         List<DerivationEngine.ProducedArtifact> artifacts = result.getArtifacts();

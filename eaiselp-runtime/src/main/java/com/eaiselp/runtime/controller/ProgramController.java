@@ -6,14 +6,17 @@ import com.eaiselp.common.security.RequirePermission;
 import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.runtime.hierarchy.Program;
 import com.eaiselp.runtime.hierarchy.ProgramService;
+import com.eaiselp.runtime.hierarchy.MilestoneService;
 import com.eaiselp.runtime.hierarchy.Strategy;
 import com.eaiselp.runtime.hierarchy.StrategyService;
+import com.eaiselp.runtime.hierarchy.dto.MilestoneTimelineVo;
 import com.eaiselp.runtime.hierarchy.dto.ProgramVo;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -38,6 +41,7 @@ public class ProgramController {
 
     private final ProgramService programService;
     private final StrategyService strategyService;
+    private final MilestoneService milestoneService;
     private final AuditService auditService;
 
     /** 分页查询项目群（含项目数/进度均值实时聚合），可按状态与关联战略过滤。 */
@@ -114,6 +118,19 @@ public class ProgramController {
         programService.deleteWithUnlink(id);
         auditService.log("program_delete", "program", String.valueOf(id));
         return R.ok();
+    }
+
+    /**
+     * 群聚合里程碑时间线（case-20260818 T15，api-contracts §2 末端点，AC-F2.6）：
+     * 群直属 + 成员项目全部里程碑合并，按 targetDate 排序，ownerLevel 区分层级。
+     *
+     * <p>挂 programs 前缀 → L2 关闭天然 43002（C6 收敛：群聚合下钻语义保留挂靠端点）；
+     * 权限用 {@code milestone:view}（里程碑读原子而非 program:view，与 milestones 前缀同源）。</p>
+     */
+    @GetMapping("/{id}/milestone-timeline")
+    @RequirePermission("milestone:view")
+    public R<List<MilestoneTimelineVo>> milestoneTimeline(@PathVariable Long id) {
+        return R.ok(milestoneService.programTimeline(id));
     }
 
     // ------------------------------------------------------------------

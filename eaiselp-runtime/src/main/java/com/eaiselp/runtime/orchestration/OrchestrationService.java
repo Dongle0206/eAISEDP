@@ -5,6 +5,8 @@ import com.eaiselp.capability.loader.CapabilityLoader;
 import com.eaiselp.adapter.spi.AdapterFactory;
 import com.eaiselp.adapter.spi.LlmAdapter;
 import com.eaiselp.common.tenant.TenantContext;
+import com.eaiselp.data.entity.Derivation;
+import com.eaiselp.data.mapper.DerivationMapper;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.hierarchy.GovernanceInjectionService;
@@ -68,6 +70,12 @@ public class OrchestrationService {
     private final GovernanceInjectionService governanceInjectionService;
     /** 门禁规则快照数据源（PRJ-002 T19/T20，SE 决策 D-3：启动一次读全部 enabled 规则） */
     private final QualityGateRuleService qualityGateRuleService;
+    /**
+     * gate_result 埋点写入（case-20260818 T21，V5 F1 DORA 数据链 AC-F1.4）：
+     * 门禁判定后按 DerivationResult.derivationId 精准 UPDATE（T1 回填，SE §4.4——
+     * 不采用 WHERE case_id+role LIMIT 1 的竞态写法）。编排对 DORA 无其他感知。
+     */
+    private final DerivationMapper derivationMapper;
 
     /** 不可逆操作（部署）前的检查点等待超时：30 分钟 */
     @Value("${eaiselp.orchestration.approval-timeout-ms:1800000}")
@@ -147,6 +155,32 @@ public class OrchestrationService {
         }
         // 无 code 步骤时打回门禁前一步
         return Math.max(0, gateIndex - 1);
+    }
+
+    /**
+     * gate_result 埋点写入（case-20260818 T21，AC-F1.4，唯一写入点=api-contracts §7）。
+     *
+     * <p>按 {@code DerivationResult.derivationId}（T1 由 DerivationPersistenceService 两路径
+     * 回填）精准 UPDATE t_derivation.gate_result——同 case+role 的打回重做多行各得其所
+     * （FAIL 行/重跑 PASS 行），RT= max(PASS finished_at)−min(FAIL finished_at) 的数据源。</p>
+     *
+     * <p><b>铁律（PRD §6.3）</b>：埋点失败绝不影响编排主流程——全 try-catch 仅 ERROR 日志；
+     * {@code derivationId=null}（落库失败回填缺失）或 {@code gateValue=null}（LLM 未输出判定
+     * 保持 NULL）直接跳过。t_derivation 走租户拦截器，runAsync 线程 TenantContext 已 set。</p>
+     */
+    private void markGateResult(Long derivationId, String gateValue) {
+        if (derivationId == null || gateValue == null) {
+            return;
+        }
+        try {
+            derivationMapper.update(null, new com.baomidou.mybatisplus.core.conditions.update
+                    .LambdaUpdateWrapper<Derivation>()
+                    .eq(Derivation::getId, derivationId)
+                    .set(Derivation::getGateResult, gateValue));
+        } catch (Throwable e) {
+            log.error("[Orchestration][Gate] gate_result 埋点失败（不影响编排主流程）derivationId={}, gate={}",
+                    derivationId, gateValue, e);
+        }
     }
 
     // ==================== 门禁规则化（PRJ-002 T19/T20，SE §6 决策 D-3） ====================
@@ -610,6 +644,10 @@ public class OrchestrationService {
                 DerivationEngine.DerivationResult result = engine.derive(agent, state.getRequirement(), state.getCaseId(), ctx);
 
                 // ★ 质量门禁判定：解析 GATE:PASS/FAIL（T19 规则驱动，SE §6.4 llm_review 分派）
+                // ★ case-20260818 T21 埋点接线（AC-F1.4）：门禁判定三支（FAIL_WARN/终判 FAIL/
+                //   打回 FAIL）与 PASS 支在此汇合处按 derivationId 精准 UPDATE t_derivation.gate_result；
+                //   埋点失败仅 ERROR 不碰主流程（markGateResult 全吞）；gate=null 不写保持 NULL；
+                //   断点续跑 executeStep 路径不接线（RT 走"≈"近似分支，口径自洽）。
                 if (isGate && result != null && result.getOutput() != null) {
                     String gate = parseGateResult(result.getOutput());
                     if ("FAIL".equals(gate)) {
@@ -619,6 +657,7 @@ public class OrchestrationService {
                                 && "warn".equalsIgnoreCase(stepResult.getGateFailAction())) {
                             stepResult.setGateResult("FAIL_WARN");
                             stepResult.setGateReason(reason);
+                            markGateResult(result.getDerivationId(), "FAIL_WARN");
                             log.warn("[Orchestration][Gate] 门禁 FAIL 但 fail_action=warn，记录放行 id={}, gate={}, 规则={}, 原因={}",
                                     id, role, stepResult.getGateRuleId(), reason);
                         } else {
@@ -632,6 +671,7 @@ public class OrchestrationService {
                             stepResult.setGateReason(reason);
                             stepResult.setError("质量门禁 " + maxRetries + " 轮重做后仍未通过: " + reason);
                             stepResult.setFinishedAt(LocalDateTime.now());
+                            markGateResult(result.getDerivationId(), "FAIL");
                             log.warn("[Orchestration][Gate] 质量门禁终判失败 id={}, gate={}, 规则={}, 轮次={}, 原因={}",
                                     id, role, stepResult.getGateRuleId(), rerun - 1, reason);
                             // 后续步骤全部标记 skipped（不部署有问题产出）
@@ -646,6 +686,7 @@ public class OrchestrationService {
                         stepResult.setGateReason(reason);
                         stepResult.setRerunCount(rerun);
                         state.setPendingGateFeedback(reason);
+                        markGateResult(result.getDerivationId(), "FAIL");
                         // 打回目标按规则的 stage 边界计算：post_dev/post_test/pre_deploy 一律打回
                         // 门禁前最后一个 code 步骤（findRerunTarget 即"最近的 code 类型步骤"）——
                         // 与改造前打回 Dev 的行为逐项等价（SE §6.5 等价表第 1 行）
@@ -664,10 +705,16 @@ public class OrchestrationService {
                     // PASS（或 LLM 忘输出判定视为 PASS 放行并告警——现状语义保留）
                     stepResult.setGateResult("PASS");
                     if (gate == null) {
+                        // T21 口径：LLM 未输出判定 → 步骤视为 PASS 放行，但 t_derivation.gate_result
+                        // 不写保持 NULL（api-contracts §7 值域），markGateResult 对 null 值自身跳过
                         log.warn("[Orchestration][Gate] 门禁角色 {} 未输出 GATE 判定标记，视为 PASS 放行（建议检查 prompt）", role);
-                    } else {
+                    } else if ("PASS".equals(gate)) {
+                        markGateResult(result.getDerivationId(), "PASS");
                         log.info("[Orchestration][Gate] 质量门禁 PASS: {} (caseId={})", role, state.getCaseId());
                     }
+                    // gate="FAIL" 且 fail_action=warn 的记录放行路径 fall-through 到此（步骤级判定
+                    // 被 PASS 行覆盖=改造前既有语义），t_derivation 埋点保持 warn 支已写的
+                    // FAIL_WARN 不再覆盖（T21 口径：FAIL+warn→FAIL_WARN 终值）
                 }
 
                 // 把这一步的产出存入 upstreamArtifacts 供后续步骤使用

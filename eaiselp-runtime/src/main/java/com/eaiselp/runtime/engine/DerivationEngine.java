@@ -109,6 +109,16 @@ public class DerivationEngine {
         private String output; private String experience; private List<ProducedArtifact> artifacts;
         private Integer inputTokens; private Integer outputTokens;
         private Long durationMs; private LocalDateTime finishedAt; private String status;
+
+        /**
+         * 落库后的派生记录 ID（V5 F1 DORA 埋点数据链，case-20260818 T1）。
+         *
+         * <p>由 {@link DerivationPersistenceService#persist} 末尾回填（异步 UPDATE 预占行 / 同步
+         * INSERT 两路径都回填）；落库失败（persist 抛出被 derive 捕获）时保持 null——
+         * 编排层门禁埋点 markGateResult 见 null 即跳过（埋点缺失不报错，保持 NULL 历史口径）。
+         * T21 接线前的唯一消费者为埋点写入点，本字段对既有调用方零行为影响。</p>
+         */
+        private Long derivationId;
     }
 
     @Data @lombok.Builder
