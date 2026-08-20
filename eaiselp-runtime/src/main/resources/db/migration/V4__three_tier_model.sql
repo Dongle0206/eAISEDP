@@ -24,9 +24,13 @@
 --      承接 team-ops 部署前检查点硬编码的等价行为，T02 裁决采纳 SE §6.5 等价表——
 --      保证升级后 pre_deploy 审批行为不变，AC-F6.5；r2 的 2 条 a/b 不变）
 -- 
--- 幂等说明（同 V3 约定）：MySQL 8.0 的 ALTER TABLE ADD COLUMN / CREATE INDEX 不支持
--- IF NOT EXISTS（MariaDB 才支持），Flyway schema history 保证本脚本只执行一次；
--- 建表语句用 IF NOT EXISTS，seed 用 INSERT IGNORE（唯一键兜底），保证可重放。
+-- 幂等说明（r4 修订，2026-08-20，#20 部署失败教训）：部署机库曾被手工 V4 草案部分执行
+-- （DDL 隐式提交永久生效），"Flyway schema history 保证只执行一次"的假设破产——失败重放 +
+-- 残留对象并存时，ADD COLUMN 撞已存在列报 1060 致命失败。本版全部非幂等 DDL
+-- （ADD COLUMN / CREATE INDEX）改为 information_schema 动态判断（存储过程 + PREPARE），
+-- 列/索引缺失才执行；任意半污染库重跑自动收敛。已验证（MySQL 8.0.29 + Flyway 9.22.3）：
+-- 全新库 / 旧库 baseline / 污染库自愈重放 三场景全过。重放 WARN（1050 表已存在 /
+-- 1062 重复 seed 被 IGNORE / 1305 DROP 不存在过程）均为预期无害告警。
 
 -- ============ L3: 战略目标 ============
 CREATE TABLE IF NOT EXISTS `t_strategy` (
@@ -90,12 +94,84 @@ CREATE TABLE IF NOT EXISTS `t_project` (
   KEY `idx_project_program` (`tenant_id`, `program_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目表（L2）';
 
+-- 残缺表补齐防御（部署机污染自救 2）：IF NOT EXISTS 会静默跳过"已存在但缺列"的表。
+-- 测试机若手工跑过 V4 草案的残缺版建表（缺 program_id/status/progress 等列），
+-- 应用层查询会运行时崩溃。此处逐列校验，缺失才补（仅覆盖 V4 本脚本定义的列）。
+DROP PROCEDURE IF EXISTS `ensure_t_project_full`;
+DELIMITER $$
+CREATE PROCEDURE `ensure_t_project_full`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='program_id') THEN
+    ALTER TABLE `t_project` ADD COLUMN `program_id` BIGINT DEFAULT NULL COMMENT '所属项目群（L2 内层级；可空=独立项目）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='description') THEN
+    ALTER TABLE `t_project` ADD COLUMN `description` TEXT COMMENT '项目描述/约束（非空时下行注入 Case 编排，见 F7）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='status') THEN
+    ALTER TABLE `t_project` ADD COLUMN `status` VARCHAR(32) NOT NULL DEFAULT 'planning' COMMENT 'planning/in_progress/delivered/closed';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='priority') THEN
+    ALTER TABLE `t_project` ADD COLUMN `priority` INT DEFAULT 5 COMMENT '优先级 1(高)-9(低)';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='progress') THEN
+    ALTER TABLE `t_project` ADD COLUMN `progress` INT DEFAULT 0 COMMENT '进度百分比 0-100（Case 完成自动上行汇总，页面只读）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='case_total') THEN
+    ALTER TABLE `t_project` ADD COLUMN `case_total` INT DEFAULT 0 COMMENT 'Case 总数（自动统计，F8 汇总算法）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND COLUMN_NAME='case_done') THEN
+    ALTER TABLE `t_project` ADD COLUMN `case_done` INT DEFAULT 0 COMMENT '已完成 Case 数（自动统计，F8 汇总算法）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND INDEX_NAME='idx_project_tenant') THEN
+    SET @ddl = 'ALTER TABLE `t_project` ADD KEY `idx_project_tenant` (`tenant_id`, `status`)';
+    PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_project' AND INDEX_NAME='idx_project_program') THEN
+    SET @ddl = 'ALTER TABLE `t_project` ADD KEY `idx_project_program` (`tenant_id`, `program_id`)';
+    PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+  END IF;
+END$$
+DELIMITER ;
+CALL `ensure_t_project_full`();
+DROP PROCEDURE IF EXISTS `ensure_t_project_full`;
+
 -- ============ L2→L1: Case 关联项目（可空=P13 不强制） ============
 -- legacy 说明：t_case 既有 program_id(VARCHAR)/subproject 为历史字段，保留只读、不写（PRD Q6）；
 -- 本期所有新功能一律使用 project_id。
-ALTER TABLE `t_case` ADD COLUMN `project_id` BIGINT DEFAULT NULL COMMENT '所属项目（L2→L1 联动；可空=不关联项目，全流程行为一致 AC-F4.3）';
--- 索引 tenant_id 打头：Case 列表按项目过滤的查询经租户拦截器改写为 WHERE tenant_id=? AND project_id=?
-CREATE INDEX `idx_case_project` ON `t_case`(`tenant_id`, `project_id`);
+-- 幂等改造（部署机污染自救）：ADD COLUMN 列已存在报 1060，CREATE INDEX 索引已存在报 1061，
+-- 均会致命失败。用 information_schema 动态判断，缺失才执行（存储过程 + PREPARE）。
+DROP PROCEDURE IF EXISTS `add_col_case_project`;
+DELIMITER $$
+CREATE PROCEDURE `add_col_case_project`()
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_case' AND COLUMN_NAME = 'project_id'
+  ) THEN
+    ALTER TABLE `t_case` ADD COLUMN `project_id` BIGINT DEFAULT NULL
+      COMMENT '所属项目（L2→L1 联动；可空=不关联项目，全流程行为一致 AC-F4.3）';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_case' AND INDEX_NAME = 'idx_case_project'
+  ) THEN
+    -- 索引 tenant_id 打头：Case 列表按项目过滤的查询经租户拦截器改写为 WHERE tenant_id=? AND project_id=?
+    SET @ddl = 'CREATE INDEX `idx_case_project` ON `t_case`(`tenant_id`, `project_id`)';
+    PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+  END IF;
+END$$
+DELIMITER ;
+CALL `add_col_case_project`();
+DROP PROCEDURE IF EXISTS `add_col_case_project`;
 
 -- ============ 项目-原则关联（r2 新增，PRD Q3/F3/F7） ============
 -- 语义（注入解析，对齐 PRD F7 默认语义/Q2）：
@@ -178,8 +254,22 @@ CREATE TABLE IF NOT EXISTS `t_quality_gate_rule` (
 -- ============ 注入留痕（r2 新增，PRD F7 P0：编排详情可见注入清单） ============
 -- t_orchestration 建于 V1/V2，本列仅快照"本次编排实际注入了什么"，运行中编排不受规则修改影响
 -- （快照语义 F6.5）与此列配合构成 AC-F7.1 的三处落点之一。
-ALTER TABLE `t_orchestration`
-  ADD COLUMN `injected_json` JSON DEFAULT NULL COMMENT '下行注入清单快照（原则code列表+是否含项目约束+是否截断，AC-F7 留痕）';
+-- 幂等：information_schema 判断，列缺失才 ADD（部署机半污染库重跑自救，1060 不再致命）。
+DROP PROCEDURE IF EXISTS `add_col_orch_injected`;
+DELIMITER $$
+CREATE PROCEDURE `add_col_orch_injected`()
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_orchestration' AND COLUMN_NAME = 'injected_json'
+  ) THEN
+    ALTER TABLE `t_orchestration`
+      ADD COLUMN `injected_json` JSON DEFAULT NULL COMMENT '下行注入清单快照（原则code列表+是否含项目约束+是否截断，AC-F7 留痕）';
+  END IF;
+END$$
+DELIMITER ;
+CALL `add_col_orch_injected`();
+DROP PROCEDURE IF EXISTS `add_col_orch_injected`;
 
 -- ============ 分层开关（r2 新增，PRD F10/Q8：P13 灵活接入的存储位） ============
 -- DEFAULT 1 —— AC-F10.4：存量租户升级后默认全开，dogfooding 行为不变。开关是 opt-out 机制：
@@ -188,9 +278,29 @@ ALTER TABLE `t_orchestration`
 -- 命名对齐 PRD §4.10 配置模型（strategy_enabled / program_project_enabled），不用 l3/l2 行话，
 -- 实施人员读库排障直指功能层；L1 恒开不设列（F10：L1 不可关）。
 -- t_tenant 在 EaiselpTenantHandler.IGNORE_TABLES 中，本表读写不走拦截器、按 id 直查，天然无越权面。
-ALTER TABLE `t_tenant`
-  ADD COLUMN `strategy_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT 'L3 战略层开关: 1=启用(默认) 0=关闭(菜单隐藏+API业务错误,数据保留可逆)',
-  ADD COLUMN `program_project_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT 'L2 项目群+项目层开关(一体,PRD Q8): 1=启用(默认) 0=关闭';
+-- 幂等：两列分别判断，缺失才 ADD（部署机半污染库重跑自救）。
+DROP PROCEDURE IF EXISTS `add_col_tenant_layers`;
+DELIMITER $$
+CREATE PROCEDURE `add_col_tenant_layers`()
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_tenant' AND COLUMN_NAME = 'strategy_enabled'
+  ) THEN
+    ALTER TABLE `t_tenant`
+      ADD COLUMN `strategy_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT 'L3 战略层开关: 1=启用(默认) 0=关闭(菜单隐藏+API业务错误,数据保留可逆)';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 't_tenant' AND COLUMN_NAME = 'program_project_enabled'
+  ) THEN
+    ALTER TABLE `t_tenant`
+      ADD COLUMN `program_project_enabled` TINYINT NOT NULL DEFAULT 1 COMMENT 'L2 项目群+项目层开关(一体,PRD Q8): 1=启用(默认) 0=关闭';
+  END IF;
+END$$
+DELIMITER ;
+CALL `add_col_tenant_layers`();
+DROP PROCEDURE IF EXISTS `add_col_tenant_layers`;
 
 -- ============ Seed: 存量租户预置六条架构原则（AC-F5.3，对齐战略地图 §4 / PRD F5） ============
 -- 内容要点取自《企业架构蓝图》§7 原则定义与 PRD §0 前置约束；P13 取战略地图新增语义（灵活接入）。

@@ -12,10 +12,12 @@
 --   related_principle_code 单值 → related_principle_codes JSON 数组（PRD §4.4"可空多选"契约，AC-F4.4 按原则筛选）
 --   gate_result VARCHAR(8)      → VARCHAR(16)——DBA 纠偏：FAIL_WARN 为 9 字符，VARCHAR(8) 存不下会写入失败/截断
 --
--- 幂等说明（同 V3/V4 约定）：MySQL 8.0 的 ALTER TABLE ADD COLUMN / CREATE INDEX 不支持
--- IF NOT EXISTS（MariaDB 才支持），Flyway schema history 保证本脚本只执行一次；
--- 建表语句用 IF NOT EXISTS，seed 用 INSERT IGNORE（唯一键兜底），保证可重放。
--- 已发布迁移 V1~V4 不改一字，全部新内容进本文件；对已发布表（t_milestone / t_derivation）用普通 ALTER。
+-- 幂等说明（r2 修订，2026-08-20，同 V4 r4 教训）：部署机半污染库重放时 ADD COLUMN 撞
+-- 已存在列报 1060 致命失败，本版全部非幂等 DDL（ADD COLUMN / ADD KEY）改为
+-- information_schema 动态判断（存储过程 + PREPARE），缺失才执行，任意污染库重跑收敛。
+-- 建表语句用 IF NOT EXISTS，seed 用 INSERT IGNORE（唯一键兜底）。
+-- 已发布迁移 V1~V4 注释与结构不改一字（V4 幂等化在其自身 r4 完成），对已发布表
+-- （t_milestone / t_derivation / t_governance_log）用动态判断 ALTER。
 --
 -- ID 区间顺延（V4 r3 用毕 permission id 1045 / role_permission id 2091）：
 --   权限原子 id 1046~1058（13 条）；角色授权行 id 2092~2133（42 行）。V6 起从 1059 / 2134 续排。
@@ -131,18 +133,60 @@ CREATE TABLE IF NOT EXISTS `t_tech_radar_item` (
 -- 状态机（应用层校验，系统永不自动置 achieved/delayed，PRD §4.2.3）：
 --   planned→achieved（人工确认，achieved_date 必填=当天可改）；planned→delayed（人工标记）；
 --   delayed→achieved（达成日期必填）；achieved→planned（撤销，清空达成日期，留审计）。
-ALTER TABLE `t_milestone`
-  ADD COLUMN `owner_type` VARCHAR(16) NOT NULL DEFAULT 'program' COMMENT '归属层级: program=项目群级/project=项目级（二选一，PRD Q3 裁决；死表无存量行，DEFAULT 仅占位，应用层必写）',
-  ADD COLUMN `owner_id` BIGINT NOT NULL DEFAULT 0 COMMENT '归属对象 ID: owner_type=program→t_program.id / project→t_project.id（雪花 ID；同上 DEFAULT 仅占位）',
-  ADD COLUMN `milestone_code` VARCHAR(32) NOT NULL COMMENT '用户可见编号（如 MS-0001，租户内唯一，应用层生成；与 legacy milestone_id 分离）',
-  ADD COLUMN `description` TEXT COMMENT '里程碑描述',
-  ADD COLUMN `owner` VARCHAR(64) DEFAULT NULL COMMENT '负责人',
-  ADD COLUMN `achieved_date` DATE DEFAULT NULL COMMENT '达成日期（achieved 状态必有值，撤销达成时清空；达成一律人工确认，系统不自动置达成）',
-  MODIFY COLUMN `status` VARCHAR(32) NOT NULL DEFAULT 'planned' COMMENT 'planned/achieved/delayed（V1 not_started 词汇废弃；逾期仅展示层高亮，不自动改状态）',
-  MODIFY COLUMN `program_id` VARCHAR(64) DEFAULT NULL COMMENT 'legacy(V1): 旧项目群弱关联(与 V4 t_program.id BIGINT 错位)，保留只读不写',
-  MODIFY COLUMN `milestone_id` VARCHAR(32) DEFAULT NULL COMMENT 'legacy(V1): 旧编号，保留只读不写，新功能用 milestone_code',
-  ADD UNIQUE KEY `uk_ms_tenant_code` (`tenant_id`, `milestone_code`),
-  ADD KEY `idx_ms_tenant_owner` (`tenant_id`, `owner_type`, `owner_id`);
+-- 幂等改造（部署机污染自救）：ADD COLUMN 列已存在报 1060、ADD KEY 索引已存在报 1061，
+-- 均致命失败；用 information_schema 动态判断，缺失才执行。MODIFY 针对 V1 既有核心列
+-- （status/program_id/milestone_id）重复定义无害（幂等），保持直接执行。
+DROP PROCEDURE IF EXISTS `alter_ms_v5`;
+DELIMITER $$
+CREATE PROCEDURE `alter_ms_v5`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND COLUMN_NAME='owner_type') THEN
+    ALTER TABLE `t_milestone`
+      ADD COLUMN `owner_type` VARCHAR(16) NOT NULL DEFAULT 'program' COMMENT '归属层级: program=项目群级/project=项目级（二选一，PRD Q3 裁决；死表无存量行，DEFAULT 仅占位，应用层必写）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND COLUMN_NAME='owner_id') THEN
+    ALTER TABLE `t_milestone`
+      ADD COLUMN `owner_id` BIGINT NOT NULL DEFAULT 0 COMMENT '归属对象 ID: owner_type=program→t_program.id / project→t_project.id（雪花 ID；同上 DEFAULT 仅占位）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND COLUMN_NAME='milestone_code') THEN
+    ALTER TABLE `t_milestone`
+      ADD COLUMN `milestone_code` VARCHAR(32) NOT NULL COMMENT '用户可见编号（如 MS-0001，租户内唯一，应用层生成；与 legacy milestone_id 分离）';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND COLUMN_NAME='description') THEN
+    ALTER TABLE `t_milestone` ADD COLUMN `description` TEXT COMMENT '里程碑描述';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND COLUMN_NAME='owner') THEN
+    ALTER TABLE `t_milestone` ADD COLUMN `owner` VARCHAR(64) DEFAULT NULL COMMENT '负责人';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND COLUMN_NAME='achieved_date') THEN
+    ALTER TABLE `t_milestone`
+      ADD COLUMN `achieved_date` DATE DEFAULT NULL COMMENT '达成日期（achieved 状态必有值，撤销达成时清空；达成一律人工确认，系统不自动置达成）';
+  END IF;
+  -- MODIFY 既有 V1 核心列（幂等，重复定义无害）
+  ALTER TABLE `t_milestone`
+    MODIFY COLUMN `status` VARCHAR(32) NOT NULL DEFAULT 'planned' COMMENT 'planned/achieved/delayed（V1 not_started 词汇废弃；逾期仅展示层高亮，不自动改状态）',
+    MODIFY COLUMN `program_id` VARCHAR(64) DEFAULT NULL COMMENT 'legacy(V1): 旧项目群弱关联(与 V4 t_program.id BIGINT 错位)，保留只读不写',
+    MODIFY COLUMN `milestone_id` VARCHAR(32) DEFAULT NULL COMMENT 'legacy(V1): 旧编号，保留只读不写，新功能用 milestone_code';
+  IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND INDEX_NAME='uk_ms_tenant_code') THEN
+    SET @ddl = 'ALTER TABLE `t_milestone` ADD UNIQUE KEY `uk_ms_tenant_code` (`tenant_id`, `milestone_code`)';
+    PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_milestone' AND INDEX_NAME='idx_ms_tenant_owner') THEN
+    SET @ddl = 'ALTER TABLE `t_milestone` ADD KEY `idx_ms_tenant_owner` (`tenant_id`, `owner_type`, `owner_id`)';
+    PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+  END IF;
+END$$
+DELIMITER ;
+CALL `alter_ms_v5`();
+DROP PROCEDURE IF EXISTS `alter_ms_v5`;
 -- 索引说明：
 --   uk_ms_tenant_code(tenant_id, milestone_code) —— 用户可见编号租户内唯一（PRD §4.2.1）。
 --   idx_ms_tenant_owner(tenant_id, owner_type, owner_id) —— 主查询"某项目群/某项目的里程碑列表"
@@ -156,8 +200,20 @@ ALTER TABLE `t_milestone`
 -- 写入点由 SE 定（编排层门禁判定解析处随派生记录写入）；写入失败仅记 ERROR 不影响编排主流程（PRD §6.3）。
 -- 宽度纠偏：VARCHAR(16)（任务书 VARCHAR(8) 存不下 9 字符的 FAIL_WARN）。
 -- 可空列追加在表尾，MySQL 8.0 走 ALGORITHM=INSTANT 不重建表——t_derivation 为高写量表，秒级完成。
-ALTER TABLE `t_derivation`
-  ADD COLUMN `gate_result` VARCHAR(16) DEFAULT NULL COMMENT '门禁判定结果: PASS/FAIL/FAIL_WARN（RT 埋点，AC-F1.4）；NULL=埋点上线前历史记录（RT 近似口径）';
+-- 幂等：列缺失才 ADD（部署机半污染库重跑自救，1060 不再致命）。
+DROP PROCEDURE IF EXISTS `add_col_deriv_gate`;
+DELIMITER $$
+CREATE PROCEDURE `add_col_deriv_gate`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_derivation' AND COLUMN_NAME='gate_result') THEN
+    ALTER TABLE `t_derivation`
+      ADD COLUMN `gate_result` VARCHAR(16) DEFAULT NULL COMMENT '门禁判定结果: PASS/FAIL/FAIL_WARN（RT 埋点，AC-F1.4）；NULL=埋点上线前历史记录（RT 近似口径）';
+  END IF;
+END$$
+DELIMITER ;
+CALL `add_col_deriv_gate`();
+DROP PROCEDURE IF EXISTS `add_col_deriv_gate`;
 
 -- gate_result 索引评估结论：不加新索引。
 --   RT 计算的访问路径总是"先定位 Case 集合（周期内 done/终态 Case）→ 再取其派生记录"，命中入口是
@@ -235,4 +291,17 @@ INSERT IGNORE INTO `t_role_permission` (`id`, `role_id`, `permission_id`) VALUES
 
 
 -- SE D-1: DORA audit-table index (IGNORE_TABLES table, index must carry tenant_id)
-ALTER TABLE t_governance_log ADD INDEX idx_tenant_action_time (tenant_id, action, create_time);
+-- 幂等：索引已存在报 1061，动态判断缺失才建（部署机半污染库重跑自救）。
+DROP PROCEDURE IF EXISTS `add_idx_audit_action_time`;
+DELIMITER $$
+CREATE PROCEDURE `add_idx_audit_action_time`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.STATISTICS
+                 WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='t_governance_log' AND INDEX_NAME='idx_tenant_action_time') THEN
+    SET @ddl = 'ALTER TABLE t_governance_log ADD INDEX idx_tenant_action_time (tenant_id, action, create_time)';
+    PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+  END IF;
+END$$
+DELIMITER ;
+CALL `add_idx_audit_action_time`();
+DROP PROCEDURE IF EXISTS `add_idx_audit_action_time`;
