@@ -2,6 +2,7 @@ package com.eaiselp.runtime.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.eaiselp.common.result.R;
+import com.eaiselp.common.result.ResultCode;
 import com.eaiselp.common.security.JwtClaims;
 import com.eaiselp.common.security.LoginUser;
 import com.eaiselp.data.entity.Quota;
@@ -14,6 +15,7 @@ import com.eaiselp.data.mapper.UserMapper;
 import com.eaiselp.data.mapper.UserRoleMapper;
 import com.eaiselp.data.mapper.vo.UserRoleView;
 import com.eaiselp.data.audit.AuditService;
+import com.eaiselp.data.service.TenantSubscriptionService;
 import com.eaiselp.runtime.hierarchy.TenantProvisionService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -49,6 +51,8 @@ public class TenantController {
     private final AuditService auditService;
     /** PRJ-002 T18：新租户治理 seed 初始化（六原则+三门禁，失败不阻塞注册） */
     private final TenantProvisionService tenantProvisionService;
+    /** case-20260820 F3（T22）：订阅状态查询/修改（口径复用 eaiselp-data 共享判定） */
+    private final TenantSubscriptionService subscriptionService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder(12);
 
     /**
@@ -169,6 +173,56 @@ public class TenantController {
                 "maskedKey", masked != null ? masked : ""));
     }
 
+    // ==================== 订阅管理（case-20260820 F3，T22：U1/U2，SE §5.5） ====================
+    // 无新增权限原子，应用层按 JWT claims roles 显式校验（roles 来自 JWT 签发，不可伪造；
+    // 与 llm-key 端点同模式但必须校验——llm-key 未校验属既有债，本期两端点按 AC-F3.5/F3.6 显式校验）
+
+    /**
+     * U1：查询当前租户订阅状态（AC-F3.5）。
+     *
+     * <p>tenant_admin / platform_admin 可访问，其他角色 40301；tenant_id 取自 JWT claims（防伪造）。
+     * daysLeft/expired 与登录口径同源（TenantSubscriptionService，PRD §4.3.1 唯一口径）。</p>
+     */
+    @GetMapping("/subscription")
+    public R<TenantSubscriptionService.SubscriptionStatus> getSubscription() {
+        JwtClaims claims = LoginUser.get();
+        if (claims == null || claims.getTenantId() == null) {
+            return R.fail(ResultCode.UNAUTHORIZED, "未登录");
+        }
+        if (!hasAnyRole(claims, "tenant_admin", "platform_admin")) {
+            return R.fail(ResultCode.FORBIDDEN, "无权查看订阅状态（仅 tenant_admin/platform_admin）");
+        }
+        return R.ok(subscriptionService.getSubscriptionStatus(claims.getTenantId()));
+    }
+
+    /**
+     * U2：修改租户订阅（恢复路径，AC-F3.6）——仅 platform_admin（tenant_admin 40301）。
+     *
+     * <p>入参 {edition?, expireTime?}：null=不变（单字段更新）；expireTime 空串=置空（Q4"未设置"）。
+     * 审计 tenant_edition_change（detail 含旧→新与操作者）；服务零缓存，修改后下次登录即生效。</p>
+     */
+    @PutMapping("/{id}/subscription")
+    public R<TenantSubscriptionService.SubscriptionStatus> updateSubscription(
+            @PathVariable Long id, @RequestBody SubscriptionUpdateRequest req) {
+        JwtClaims claims = LoginUser.get();
+        if (claims == null) {
+            return R.fail(ResultCode.UNAUTHORIZED, "未登录");
+        }
+        if (!hasAnyRole(claims, "platform_admin")) {
+            return R.fail(ResultCode.FORBIDDEN, "仅 platform_admin 可修改租户订阅");
+        }
+        return R.ok(subscriptionService.updateSubscription(id, req.getEdition(), req.getExpireTime()));
+    }
+
+    /** JWT claims roles 显式校验（任一命中即 true；roles 来自登录签发，不可客户端伪造）。 */
+    private boolean hasAnyRole(JwtClaims claims, String... roles) {
+        if (claims == null || claims.getRoles() == null) return false;
+        for (String role : roles) {
+            if (claims.getRoles().contains(role)) return true;
+        }
+        return false;
+    }
+
     @Data
     public static class RegisterRequest {
         private String tenantName;
@@ -181,5 +235,13 @@ public class TenantController {
         /** glm / deepseek */
         private String provider;
         private String apiKey;
+    }
+
+    @Data
+    public static class SubscriptionUpdateRequest {
+        /** ∈ trial/pro/enterprise/starter；null=不变（非法值 400） */
+        private String edition;
+        /** yyyy-MM-dd HH:mm:ss；null=不变；空串=置空（Q4"未设置"语义） */
+        private String expireTime;
     }
 }

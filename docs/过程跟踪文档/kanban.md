@@ -1,39 +1,37 @@
-# 任务看板 — case-20260722-ES002-执行瑕疵补全
+# 任务看板 — eAISEDP 平台建设（PRG-001）
 
-> **背景**：M1.1 Dogfooding 验证报告暴露 4 个执行层面瑕疵（Reviewer 报告未落盘 / case vs 工程目录混乱 / Windows 环境陷阱 / Dev 报告措辞偏差）。
->
-> **修复策略**：L2 Standards 主导新增 ES-002 工程标准（4 章规范）+ G7-G10 质量门禁（4 条规则 + 可执行 .ps1），系统性修复。
+> 更新：2026-08-20 | 编排者：team-orchestrator | 数据契约：markdown（dogfooding 成熟后迁 t_project）
 
 ## Todo
-（无）
+- [ ] Wave2 L3 收口：GRC 风险合规 + 投资决策分析（PRJ-004 尾巴，PO 已排队）
+- [ ] Wave3 工程债 V7：IMP-012（t_derivation.deleted 索引）+ R2-R4 XSS 残余加固
+- [ ] Wave4 企业资产适配：MCP 真实适配器（Jira/Confluence/GitLab，Mock+契约先行）
+- [ ] Wave5 商用化：订阅/计费/SLA（PRJ-006，含 U2 白名单模式/平台角色体系重构 IMP-018）
+- [ ] 测试机环境重搭：原生 MySQL（deploy\setup_mysql_native.bat 已备）+ #22 联测
 
 ## Doing
-（无）
+- [ ] [L1-QA] case-20260820-L2治理收口 验收测试（31 AC 用例矩阵 + 人工联测清单）
 
-## Done
-- [x] [L2-Standards] ES-002 工程标准规范（4 章：角色产出物落盘 / 文档体系与目录归属 / Windows 工程标准 / Dev 报告规范）
-- [x] [L2-Standards] G7-G10 质量门禁（4 条规则 + 可执行 .ps1，含 3 条反向验证）
-- [x] [L1-Ops] .gitattributes 落地（585 字节，11 类扩展名规则生效）
-- [x] [L1-Ops] CLAUDE.md 追加 §8 + 更新 §6/§7
-- [x] [L1-Reviewer] 评审通过（第1轮，0 阻断 / 2 建议 / 1 可选，5 条 Standards 声明独立复现）
-- [x] [L1-QA] 测试通过（9 PASS + DEF-01 非阻断，反向验证 3 条全命中预期 FAIL）
-- [x] [L1-Reviewer] 补写 review-M1.0-编译修复.md（修复 IMP-004）
-- [x] [L1-Ops] git 归档（commit 1bba983）
-- [x] [L1-Dev] DerivationEngine 持久化实现：data 模块 Service 层 + runtime 引依赖 + DerivationPersistenceService 独立 Bean
-- [x] [L1-Reviewer] 评审通过（第1轮，0 阻断 / 0 建议 / 2 可选 D1+D2）
-- [x] [L1-QA] 测试通过（13 PASS + 1 N/A，反向验证 TC-10/TC-11 破坏源码看测试反应证明非空壳）
+## Done（最近）
+- [x] [case-20260820-L2治理收口] 全链路交付：PO（31 AC）→ 裁决 Q1~Q11 → SE（25 端点/governance 包/双点拦截）→ DBA（V6 已真实 MySQL 验证：V1→V6 链+幂等重放）→ BA（24 任务四批）→ Dev×4 批（492→503→508 全绿）→ Reviewer PASS（0 阻断/3 建议/3 可选全修）→ Security 三轮（FAIL→FAIL→PASS：拦下存储型 XSS 高危 + ci collation 提权绕过，7 载荷 0 存活）
+- [x] [F3 商用硬伤] 试用到期拦截：登录 40003 + 临期三档 + 派生/编排/retry 三入口 + U2 恢复路径 + runbook
+- [x] [F1/F2] 标准库（多版本+门禁打通）/ 模板库 / 数据资产 / 质量规则 四域 + 前端 4 页 + RBAC（1059~1070）
+- [x] [安全] sanitize.js 公共 XSS 清洗 / D-9 占位瘦身 / 平台角色两层防提权 / user:edit 权限码修正
 
 ## 已归档
-- [x] case-20260721-M1.0-编译修复（commit 2f84e10 + c4ea0c0 收尾）
+- [x] case-20260721-M1.0-编译修复（commit 2f84e10 + c4ea0c0）
 - [x] case-20260722-ES002-执行瑕疵补全（commit 1bba983）
-- [x] case-20260722-DerivationEngine持久化（2026-07-22，REQ-003 交付 + IMP-003 完成，hash 见 git log --grep）
+- [x] case-20260722-DerivationEngine持久化（REQ-003 + IMP-003）
+- [x] case-20260818-三层贯通企业级平台（f252f0c + 收尾 93aaa39，237 测）
+- [x] case-20260818-L2治理核心（03d2cc5，389 测）
+- [x] Flyway V4/V5 幂等化修复（e563e75，#20 部署失败 1060 根治）
 
 ## 阻塞
-- 无
+- 无（测试机 Docker Desktop 停用已破阻塞：#22 部署脚本 Docker/原生 MySQL 自适应）
 
-## 待办（M2 转入）
-- [ ] IMP-003：library 模块 application.yml 残留独立服务配置（引 data 到 runtime 时清理）
-- [ ] IMP-008：质量门禁 .ps1 行 40/42/44/46/49-52 注释含中文字面量
-- [ ] IMP-009：G7 不区分 case，多 case 并发漏报风险
-- [ ] IMP-011：G10 判定逻辑与 md §2 文档语义不一致（M2 接 CI/CD 时强化）
-- [ ] BUG-002：Docker Desktop WSL2 后端未启用（依赖人工装 WSL2+重启）
+## 遗留技术债（M2 看板顺延）
+- [ ] IMP-008：质量门禁 .ps1 中文注释字面量（低危）
+- [ ] IMP-009：G7 不区分 case 并发漏报（低危）
+- [ ] IMP-011：G10 判定逻辑与文档语义（接 CI/CD 时强化）
+- [ ] IMP-012：t_derivation.deleted 无索引（Wave3 V7 处理）
+- [ ] RuntimeController jackson-datatype-jsr310 WARN（P12，非阻塞）

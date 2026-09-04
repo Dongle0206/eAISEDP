@@ -2,10 +2,14 @@ package com.eaiselp.runtime.controller;
 
 import com.eaiselp.capability.loader.CapabilityLoader;
 import com.eaiselp.capability.model.AgentDefinition;
+import com.eaiselp.common.exception.BizException;
 import com.eaiselp.common.ratelimit.RateLimit;
 import com.eaiselp.common.result.R;
+import com.eaiselp.common.security.JwtClaims;
+import com.eaiselp.common.security.LoginUser;
 import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.data.audit.AuditService;
+import com.eaiselp.data.service.TenantSubscriptionService;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.orchestration.OrchestrationService;
@@ -60,6 +64,8 @@ public class RuntimeController {
     private final ArtifactFileService artifactFileService;
     private final GitService gitService;
     private final CodeValidationService codeValidationService;
+    /** case-20260820 F3（T20）：试用到期前置校验（eaiselp-data 共享口径） */
+    private final TenantSubscriptionService subscriptionService;
 
     /**
      * 手动派生单角色（M2-DFX 异步化：立即返回 taskId）。
@@ -83,6 +89,9 @@ public class RuntimeController {
         if (agent == null) {
             return ResponseEntity.ok(R.fail("角色未注册或未加载: " + req.getRole()));
         }
+        // ①.5 [T20 F3] 试用到期前置校验（SE §4.3：参数校验后、资源预占前）——
+        // 存量 JWT 24h 窗口的 token 烧刷口补位：到期 40003，不 createPending、不烧 token
+        assertTrialNotExpired("derive_trial_blocked");
         DerivationContext ctx = DerivationContext.builder()
                 .task(req.getTask()).stage(req.getStage()).build();
         // ② 预占 DB 行拿 taskId（createPending 内部 INSERT pending + 内存 put）
@@ -149,6 +158,9 @@ public class RuntimeController {
         if (req.getRequirement() == null || req.getRequirement().isBlank()) {
             return ResponseEntity.ok(R.fail("requirement（需求）不能为空"));
         }
+        // [T20 F3] 试用到期前置校验（SE §4.3：requirement 校验后、start 之前）——
+        // 到期 40003，不 start、不预占编排行、不烧 token
+        assertTrialNotExpired("orchestrate_trial_blocked");
         Long tenantId = TenantContext.get();
         Long orchId = orchestrationService.start(req.getRequirement(), req.getCaseId(), req.getTier());
         auditService.log("orchestrate_start", "case", req.getCaseId(),
@@ -225,6 +237,11 @@ public class RuntimeController {
                     + (finalGate.getGateReason() == null ? "" : finalGate.getGateReason())
                     + "），禁止断点续跑绕过。如需重做请发起新编排。"));
         }
+        // [M2 安全评审] 试用到期前置校验（对齐 /derive /orchestrate 既有口径）：retry 本质是
+        // 派生的另一个触发器——到期租户持 24h 存量 JWT 对已结束编排重试仍会重跑派生步骤、
+        // 继续烧 LLM token。插入位=门禁终判检查后、retryFromStep 前（不重跑、不烧 token），
+        // 失败审计 action=orchestrate_retry_trial_blocked（assertTrialNotExpired 内统一补记）
+        assertTrialNotExpired("orchestrate_retry_trial_blocked");
         Long tenantId = TenantContext.get();
         orchestrationService.retryFromStep(id, fromStep, tenantId);
         auditService.log("orchestrate_retry", "case", state.getCaseId(),
@@ -320,6 +337,30 @@ public class RuntimeController {
         } catch (Exception e) {
             return org.springframework.http.ResponseEntity.internalServerError()
                     .body("预览失败: " + e.getMessage());
+        }
+    }
+
+    /**
+     * [T20 F3] 试用到期前置校验（/derive 与 /orchestrate 入口共用，SE §4.3）。
+     *
+     * <p>到期抛 {@code BizException(40003)} → GlobalExceptionHandler → R.fail(40003)，
+     * 由构造保证"不 createPending、不 start、不烧 token"（校验点在资源预占之前）。
+     * 失败时补审计（resource_type=tenant，detail 含 tenantId/username，failure）。</p>
+     */
+    private void assertTrialNotExpired(String blockedAction) {
+        Long tenantId = TenantContext.get();
+        try {
+            subscriptionService.assertNotExpired(tenantId);
+        } catch (BizException e) {
+            JwtClaims claims = LoginUser.get();
+            auditService.log(blockedAction, "tenant",
+                    tenantId != null ? String.valueOf(tenantId) : null,
+                    "{\"tenantId\":" + tenantId
+                            + ",\"username\":\"" + safeJson(claims != null ? claims.getUsername() : null) + "\"}",
+                    "failure", e.getMessage());
+            log.warn("[Trial] {} 派生入口拦截: tenantId={}, username={}",
+                    blockedAction, tenantId, claims != null ? claims.getUsername() : null);
+            throw e;
         }
     }
 

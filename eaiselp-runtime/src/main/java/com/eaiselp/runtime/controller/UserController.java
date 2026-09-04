@@ -23,14 +23,16 @@ import java.util.List;
  *
  * <p><b>路径</b>：{@code /api/v1/users}（ES-003 §9.4 P13，新增 API 强制 /v1/ 前缀）。
  *
- * <p><b>权限</b>（对齐 schema 已有权限码 user:view/create/update/delete，PermissionInterceptor 拦截）：
+ * <p><b>权限</b>（对齐 V1 seed 实际权限码 user:view/create/edit/disable，PermissionInterceptor 拦截）：
  * <ul>
  *   <li>读类（列表/详情）：{@code user:view}</li>
  *   <li>创建：{@code user:create}</li>
- *   <li>更新/禁用/分配角色：{@code user:update}（禁用属 update 域，不单独 user:delete，避免改 schema）</li>
+ *   <li>更新/禁用/分配角色：{@code user:edit}（禁用属 edit 域，不单独 user:disable，避免改 schema）</li>
  * </ul>
- * 注：任务清单写 {@code user:delete}，但 schema 的 user 域权限码是 user:view/create/update/edit/disable
- * （无 user:delete，因禁用而非物理删除）。这里禁用用 {@code user:update}（语义最贴近，避免改 schema.sql）。
+ * 注（M3 安全评审修正）：原用 {@code user:update}，但 V1 seed user 域权限码为
+ * user:view/create/edit/disable（1009~1012，无 user:update）→ 三个写端点恒 403 隐性死端点。
+ * 已对齐为 {@code user:edit}；配套纵深见 UserServiceImpl 平台角色黑名单
+ * （platform_admin 不可经租户内接口分配，防 tenant_admin 自分平台角色后调 U2 绕过试用控制）。
  *
  * <p><b>多租户隔离</b>：tenantId 从 LoginUser（JWT claims）取，不从请求参数取（防客户端伪造，ES-003 §9.3 G13）。
  *
@@ -96,7 +98,7 @@ public class UserController {
 
     /** 更新用户（displayName/status/roles；roles 非空时同步角色）。 */
     @PutMapping("/{id}")
-    @RequirePermission("user:update")
+    @RequirePermission("user:edit")
     public R<User> update(@PathVariable Long id, @RequestBody UpdateUserRequest req) {
         User u = userService.update(currentTenantId(), id,
                 req.getDisplayName(), req.getStatus(), req.getRoles());
@@ -110,7 +112,7 @@ public class UserController {
 
     /** 禁用用户（status=disabled，不物理删除）。 */
     @DeleteMapping("/{id}")
-    @RequirePermission("user:update")
+    @RequirePermission("user:edit")
     public R<Void> disable(@PathVariable Long id) {
         boolean ok = userService.disable(currentTenantId(), id);
         if (!ok) return R.fail(404, "用户不存在: userId=" + id);
@@ -119,9 +121,9 @@ public class UserController {
         return R.ok();
     }
 
-    /** 分配角色（覆盖式）。 */
+    /** 分配角色（覆盖式；platform_admin 平台角色黑名单拒绝，见 UserServiceImpl M3 纵深）。 */
     @PostMapping("/{id}/roles")
-    @RequirePermission("user:update")
+    @RequirePermission("user:edit")
     public R<Void> assignRoles(@PathVariable Long id, @RequestBody AssignRolesRequest req) {
         if (req.getRoleCodes() == null) {
             return R.fail(400, "roleCodes 不能为空（可为空数组表示清空角色）");

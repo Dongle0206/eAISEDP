@@ -4,16 +4,19 @@ import com.eaiselp.auth.dto.LoginRequest;
 import com.eaiselp.auth.dto.LoginResponse;
 import com.eaiselp.auth.dto.UserInfo;
 import com.eaiselp.auth.service.impl.AuthServiceImpl;
+import com.eaiselp.common.dto.TrialTipVo;
 import com.eaiselp.common.exception.BizException;
 import com.eaiselp.common.result.ResultCode;
 import com.eaiselp.common.security.JwtClaims;
 import com.eaiselp.common.security.JwtUtil;
 import com.eaiselp.common.security.SecurityProperties;
+import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.data.entity.Tenant;
 import com.eaiselp.data.entity.User;
 import com.eaiselp.data.mapper.TenantMapper;
 import com.eaiselp.data.mapper.UserMapper;
 import com.eaiselp.data.service.PermissionService;
+import com.eaiselp.data.service.impl.TenantSubscriptionServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -23,6 +26,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -56,6 +60,19 @@ import static org.mockito.Mockito.*;
  *   <li>TC5 防枚举恒定时延（用户不存在时也跑了 dummy BCrypt，耗时接近正常登录）</li>
  *   <li>TC6 登录成功后 lastLoginAt 被更新</li>
  * </ul>
+ *
+ * <p>case-20260820 F3（T19，SE §9.1 锚点 6~9）——试用到期拦截扩展：
+ * <ul>
+ *   <li>TC7 到期拦截：trial+过期 → 40003、message 含「试用已到期」、不签 token、lastLoginAt 未更新、
+ *       审计 login_trial_blocked（锚点 6，AC-F3.1）</li>
+ *   <li>TC8 防枚举顺序：错密码+到期租户 → 40001 而非 40003（锚点 7）</li>
+ *   <li>TC9 临期随登录返回：四档 trialTip 数值断言 + 非 trial 无提示（锚点 8，AC-F3.2/F3.3）</li>
+ *   <li>TC1~TC6 原用例不动通过（锚点 9，登录主流程零回归）</li>
+ * </ul>
+ *
+ * <p>F3 口径链路：被测类内 {@link TenantSubscriptionServiceImpl} 用<b>真实实例</b>
+ * （包 mock TenantMapper），登录链路的到期判定/临期提示走真实口径（PRD §4.3.1），
+ * 而非对口径本身的 mock——口径单测见 data 模块 TenantSubscriptionServiceTest。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class AuthServiceImplTest {
@@ -63,11 +80,14 @@ class AuthServiceImplTest {
     @Mock UserMapper userMapper;
     @Mock TenantMapper tenantMapper;
     @Mock PermissionService permissionService;
+    @Mock AuditService auditService;
 
-    /** 被测实例（手工构造：3 个接口 mock + 1 个真实 JwtUtil）。 */
+    /** 被测实例（手工构造：3 个接口 mock + 1 个真实 JwtUtil + 真实订阅口径服务）。 */
     private AuthServiceImpl authService;
     /** 真实 JwtUtil（手工 init），替代 mock，规避 JDK26 对具体类的插桩失败。 */
     private JwtUtil jwtUtil;
+    /** 真实订阅口径服务（包 mock TenantMapper）：登录链路内到期判定/临期提示走真实实现。 */
+    private TenantSubscriptionServiceImpl subscriptionService;
 
     /** 真实 BCrypt（与被测类内 cost=12 一致），用于预生成测试密码 hash。 */
     private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder(12);
@@ -84,8 +104,10 @@ class AuthServiceImplTest {
         jwtUtil = new JwtUtil(props);
         jwtUtil.init(); // @PostConstruct 逻辑，无 Spring 时手动触发
 
-        // 手工构造被测实例（不依赖 @InjectMocks，便于混入真实 JwtUtil）
-        authService = new AuthServiceImpl(userMapper, tenantMapper, permissionService, jwtUtil);
+        // 手工构造被测实例（不依赖 @InjectMocks，便于混入真实 JwtUtil 与真实订阅口径服务）
+        subscriptionService = new TenantSubscriptionServiceImpl(tenantMapper, auditService);
+        authService = new AuthServiceImpl(userMapper, tenantMapper, permissionService, jwtUtil,
+                subscriptionService, auditService);
         // @Value 非 final 字段，无 Spring 时不会注入，显式设值
         ReflectionTestUtils.setField(authService, "defaultTenantId", TENANT_ID);
     }
@@ -128,6 +150,8 @@ class AuthServiceImplTest {
         assertEquals(List.of("ADMIN"), info.getRoles());
         assertEquals(List.of("ADMIN"), info.getRoleCodes(), "roles 与 roleCodes 值应相同");
         assertEquals(List.of("case:read"), info.getPermissions());
+        // T19 锚点 9 回归：非 trial 租户（buildTenant 未设 edition）登录响应无试用提示
+        assertNull(resp.getTrialTip(), "非 trial 租户登录响应 trialTip 应为 null（AC-F3.3）");
 
         // 反向验证：签出的 token 能被真实 JwtUtil 解析回正确 claims（验证 claims 字段填充正确）
         JwtClaims claims = jwtUtil.parse(resp.getToken());
@@ -273,6 +297,127 @@ class AuthServiceImplTest {
         assertNotNull(updated.getLastLoginAt(), "lastLoginAt 必须被设置");
     }
 
+    // ==================== TC7 到期拦截（T19 锚点 6，AC-F3.1） ====================
+
+    /** TC7：trial+过期 → 40003、message 含「试用已到期」、不签 token（异常即返回）、lastLoginAt 未更新、审计 login_trial_blocked。 */
+    @Test
+    void TC7_试用到期_抛40003_不签token_不更新lastLoginAt_审计留痕() {
+        User user = buildActiveUser();
+        when(userMapper.selectOne(any())).thenReturn(user);
+        // 租户：trial，expire = 昨日（AC-F3.1 Given：expire_time=昨日 12:00 同构，相对法构造）
+        when(tenantMapper.selectById(TENANT_ID)).thenReturn(buildTrialTenant("trial", LocalDateTime.now().minusDays(1)));
+
+        LoginRequest req = new LoginRequest();
+        req.setUsername("alice");
+        req.setPassword(RAW_PASSWORD);
+
+        BizException ex = assertThrows(BizException.class, () -> authService.login(req));
+        assertEquals(ResultCode.TRIAL_EXPIRED, ex.getCode(), "到期登录必须 40003");
+        assertTrue(ex.getMessage().contains("试用已到期"), "message 必含「试用已到期」");
+        assertTrue(ex.getMessage().contains("升级"), "message 必含升级指引");
+
+        // 不签发 JWT（异常中断）、不更新 last_login_at（AC-F3.1 Then）
+        verify(userMapper, never()).updateById(any());
+
+        // 审计 login_trial_blocked：resource_type=tenant、resource_id=tenantId、detail 含 username/expireTime
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(auditService).log(eq("login_trial_blocked"), eq("tenant"), eq(String.valueOf(TENANT_ID)),
+                detail.capture(), eq("failure"), contains("试用已到期"));
+        assertTrue(detail.getValue().contains("\"tenantId\":" + TENANT_ID), "detail 含 tenantId（claims=null 时可检索）");
+        assertTrue(detail.getValue().contains("\"username\":\"alice\""), "detail 含 username");
+        assertTrue(detail.getValue().contains("\"edition\":\"trial\""), "detail 含 edition");
+        assertFalse(detail.getValue().contains("\"expireTime\":\"\""), "detail 含 expireTime 非空回显");
+    }
+
+    // ==================== TC8 防枚举顺序（T19 锚点 7） ====================
+
+    /** TC8：错密码 + 到期租户 → 40001 而非 40003（凭据校验先于到期校验，不泄露租户状态，PRD §4.3.1）。
+     *  注：不桩 tenantMapper.selectById——凭据错误在 ④.5（租户查询）之前即抛出，租户状态根本未被读取。 */
+    @Test
+    void TC8_错密码加到期租户_仍40001防枚举() {
+        User user = buildActiveUser();
+        when(userMapper.selectOne(any())).thenReturn(user);
+
+        LoginRequest req = new LoginRequest();
+        req.setUsername("alice");
+        req.setPassword("WrongPassword");
+
+        BizException ex = assertThrows(BizException.class, () -> authService.login(req));
+        assertEquals(ResultCode.BAD_CREDENTIAL, ex.getCode(), "错密码+到期租户必须仍报 40001（防枚举顺序）");
+
+        verify(auditService, never()).log(eq("login_trial_blocked"), any(), any(), any(), any(), any());
+        verify(userMapper, never()).updateById(any());
+    }
+
+    // ==================== TC9 临期提示随登录返回（T19 锚点 8，AC-F3.2） ====================
+
+    /** TC9a：T7 口径（expire=T+7×24h−1h）→ 登录成功 + trialTip{daysLeft=7, level=normal}。 */
+    @Test
+    void TC9a_临期7天_登录成功携带normal档提示() {
+        LoginResponse resp = loginWithTrialExpire(LocalDateTime.now().plusHours(7 * 24 - 1));
+        TrialTipVo tip = resp.getTrialTip();
+        assertNotNull(tip, "T7（+7×24h−1h）登录响应应含 trialTip");
+        assertEquals(7, tip.getDaysLeft(), "T7 剩余 7 天（N=ceil）");
+        assertEquals(TrialTipVo.LEVEL_NORMAL, tip.getLevel());
+        assertNotNull(tip.getExpireTime());
+        assertNotNull(resp.getToken(), "临期不影响登录成功（含 token）");
+    }
+
+    /** TC9b：T3 口径（expire=T+3×24h−1h）→ trialTip{daysLeft=3, level=warning}（黄色档）。 */
+    @Test
+    void TC9b_临期3天_登录成功携带warning档提示() {
+        LoginResponse resp = loginWithTrialExpire(LocalDateTime.now().plusHours(3 * 24 - 1));
+        assertEquals(3, resp.getTrialTip().getDaysLeft(), "T3 剩余 3 天");
+        assertEquals(TrialTipVo.LEVEL_WARNING, resp.getTrialTip().getLevel());
+    }
+
+    /** TC9c：T1 口径（expire=T+7h）→ trialTip{daysLeft=1, level=critical}（红色档）。 */
+    @Test
+    void TC9c_临期7小时_登录成功携带critical档提示() {
+        LoginResponse resp = loginWithTrialExpire(LocalDateTime.now().plusHours(7));
+        assertEquals(1, resp.getTrialTip().getDaysLeft(), "T1 剩余 1 天（不满一天算 1 天）");
+        assertEquals(TrialTipVo.LEVEL_CRITICAL, resp.getTrialTip().getLevel());
+    }
+
+    /** TC9d：T8 口径（expire=T+8×24h，超出提示窗口）与正式版 → trialTip=null。 */
+    @Test
+    void TC9d_超窗口与正式版_无trialTip() {
+        // T8：+8×24h > 7×24h → 无提示
+        LoginResponse t8 = loginWithTrialExpire(LocalDateTime.now().plusHours(8 * 24));
+        assertNull(t8.getTrialTip(), "T8（+8×24h）登录响应无 trialTip");
+
+        // 正式版：expire 已过仍无任何提示/拦截（AC-F3.3，expire 完全忽略）
+        User user = buildActiveUser();
+        when(userMapper.selectOne(any())).thenReturn(user);
+        when(permissionService.getRoleCodesByUserId(anyLong())).thenReturn(List.of("ADMIN"));
+        when(permissionService.getRoleIdsByUserId(anyLong())).thenReturn(List.of(10L));
+        when(permissionService.getPermissionCodesByRoleIds(any())).thenReturn(List.of("case:read"));
+        when(tenantMapper.selectById(TENANT_ID)).thenReturn(buildTrialTenant("pro", LocalDateTime.now().minusDays(30)));
+
+        LoginRequest req = new LoginRequest();
+        req.setUsername("alice");
+        req.setPassword(RAW_PASSWORD);
+        LoginResponse resp = authService.login(req);
+
+        assertNotNull(resp.getToken(), "正式版过期 30 天仍正常登录（豁免）");
+        assertNull(resp.getTrialTip(), "正式版无试用提示");
+    }
+
+    /** TC9 辅助：构造 trial 租户 + 指定 expire，走完整登录成功链路（真实订阅口径服务）。 */
+    private LoginResponse loginWithTrialExpire(LocalDateTime expire) {
+        User user = buildActiveUser();
+        when(userMapper.selectOne(any())).thenReturn(user);
+        when(permissionService.getRoleCodesByUserId(anyLong())).thenReturn(List.of("ADMIN"));
+        when(permissionService.getRoleIdsByUserId(anyLong())).thenReturn(List.of(10L));
+        when(permissionService.getPermissionCodesByRoleIds(any())).thenReturn(List.of("case:read"));
+        when(tenantMapper.selectById(TENANT_ID)).thenReturn(buildTrialTenant("trial", expire));
+
+        LoginRequest req = new LoginRequest();
+        req.setUsername("alice");
+        req.setPassword(RAW_PASSWORD);
+        return authService.login(req);
+    }
+
     // ==================== fixtures ====================
 
     private User buildActiveUser() {
@@ -292,6 +437,14 @@ class AuthServiceImplTest {
         t.setId(TENANT_ID);
         t.setTenantCode("TENANT_DEFAULT");
         t.setTenantName("DefaultTenant");
+        return t;
+    }
+
+    /** F3 用：指定 edition/expireTime 的租户（buildTenant 未设 edition，走豁免分支）。 */
+    private Tenant buildTrialTenant(String edition, LocalDateTime expireTime) {
+        Tenant t = buildTenant();
+        t.setEdition(edition);
+        t.setExpireTime(expireTime);
         return t;
     }
 

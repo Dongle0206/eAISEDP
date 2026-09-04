@@ -20,7 +20,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
                 "com.eaiselp.data.mapper",
                 "com.eaiselp.adapter.routing.mapper",
                 "com.eaiselp.runtime.orchestration",   // #15 编排持久化 OrchestrationRecordMapper
-                "com.eaiselp.runtime.hierarchy"        // PRJ-002 T04：三层贯通六实体 Mapper（Strategy/Program/Project/ArchitecturePrinciple/QualityGateRule/ProjectPrinciple）
+                "com.eaiselp.runtime.hierarchy",       // PRJ-002 T04：三层贯通六实体 Mapper（Strategy/Program/Project/ArchitecturePrinciple/QualityGateRule/ProjectPrinciple）
+                "com.eaiselp.runtime.governance"       // case-20260820 T1：L2 治理收口四域 Mapper（Standard/Template/DataAsset/DataQualityRule，D-1 新包）
         })
 @SpringBootApplication(scanBasePackages = {
         "com.eaiselp.runtime",

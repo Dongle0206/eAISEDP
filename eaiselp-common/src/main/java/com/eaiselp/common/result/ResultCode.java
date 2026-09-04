@@ -6,6 +6,7 @@ public final class ResultCode {
     public static final int BAD_REQUEST = 40000;      // 请求参数错误（M3-3 新增：用户管理 CRUD 校验失败）
     public static final int BAD_CREDENTIAL = 40001;   // 用户名或密码错误（不区分用户不存在 vs 密码错，防枚举）
     public static final int ACCOUNT_DISABLED = 40002; // 账户已禁用
+    public static final int TRIAL_EXPIRED = 40003;    // 试用已到期（case-20260820 F3，Q9 定稿：4000x 家族顺延）
     public static final int NOT_FOUND = 40400;        // 资源不存在（M3-3 新增：用户/资源找不到）
     public static final int UNAUTHORIZED = 40101;     // 未登录或 token 缺失
     public static final int TOKEN_INVALID = 40102;    // token 无效或已过期

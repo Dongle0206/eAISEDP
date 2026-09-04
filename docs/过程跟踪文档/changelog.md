@@ -37,3 +37,23 @@
 - 2026-08-18 | 交付 | 收尾5项+Swagger交付（242测全绿）
 - 2026-08-18 | 需求 | L2治理核心+知识资产（DORA/里程碑/依赖/ADR/技术雷达） | PRG-001 | 新表3张+API+看板
 - 2026-08-18 | 交付 | L2治理核心交付（389测全绿，联测10条待部署机）
+
+
+## v0.2.0（2026-08-20 L2 治理收口）
+
+### 新需求
+- [REQ-007] 2026-08-20 | L2 治理收口：标准库（多版本状态机+门禁打通）+ 模板库（原地升版）+ 数据治理（资产目录+质量规则）+ 试用到期拦截（登录/派生/编排/retry 四入口 40003 + 临期三档 + platform_admin 恢复路径）| 来源：PRG-001 PRJ-003 尾巴 + PRJ-006 前置（商用硬伤：试用永不过期）| 状态：已交付（case-20260820-L2治理收口，PO/SE/DBA/BA/Dev×4/Reviewer/Security×3/QA 全链路；V6 迁移真实 MySQL 验证）
+
+### 缺陷修复（安全门禁拦截）
+- [BUG-003] 2026-08-20 | 存储型 XSS：standard/template 两页 renderMd 仅删 script 标签，img onerror 载荷存活可窃 localStorage token | 严重度：高危 | 状态：已修复（sanitize.js 公共 DOM 级清洗，7 类载荷 0 存活）
+- [BUG-004] 2026-08-20 | 平台角色提权：M3 黑名单 contains 大小写敏感，生产 ci collation 下 PLATFORM_ADMIN 变体可绕过→免费转正 | 严重度：高 | 状态：已修复（两层纵深：trim+equalsIgnoreCase + tenant_id=0 行级拒绝，H2 测不出的 collation 差异由 Security 真库视角发现）
+- [BUG-005] 2026-08-20 | 到期绕过：/orchestrate/{id}/retry 缺到期校验，存量 JWT 可继续烧 token | 状态：已修复（三入口闭合，MCP /invoke 裁决 Q10 不纳入）
+- [BUG-006] 2026-08-20 | D-9 越界：旁路逻辑删查询返回已删标准正文 | 状态：已修复（toGateRefVo 占位瘦身）
+- [BUG-007] 2026-08-20 | dashboard.html 既有 JS 语法错误（HEAD 就有，const reqs 缺 ]）| 状态：顺手修复（Reviewer 确认最小）
+- [BUG-008] 2026-08-20 | 权限码错位：user:update→user:edit（V1 seed 1009~1012），写端点恒 403 隐性死端点 | 状态：已修复
+
+### 改进/技术债
+- [IMP-015] Flyway V6：4 新表 + 12 权限原子 + 36 授权行，纯 IF NOT EXISTS 零 ALTER（V4 r4/V5 r2 幂等规范延续）
+- [IMP-016] sanitize.js 公共 XSS 清洗 + governance-dict.js 前端字典集中（P6）
+- [IMP-017] U2 租户订阅恢复端点 + 试用到期恢复runbook（一行 SQL 5 分钟恢复）
+- [IMP-018] R2-R4 XSS 残余加固（中缀控制字符/base 标签/CSS 面）→ PRJ-006 backlog

@@ -2,6 +2,7 @@ package com.eaiselp.data.service;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.eaiselp.common.exception.BizException;
+import com.eaiselp.common.result.ResultCode;
 import com.eaiselp.data.entity.Role;
 import com.eaiselp.data.entity.User;
 import com.eaiselp.data.entity.UserRole;
@@ -45,6 +46,11 @@ import static org.mockito.Mockito.*;
  *   <li>TC4 禁用用户：status→disabled，不删数据（仅 updateById）</li>
  *   <li>TC5 分配角色：覆盖式 assignRoles（先删旧关联再插新关联）+ t_user.roles 同步更新</li>
  *   <li>TC6 getRoleIdsByCodes：角色码列表→角色ID列表映射</li>
+ *   <li>TC7 平台角色黑名单（M3）：create/update/assignRoles 三入口 40301 拒绝 + 零 DB 写</li>
+ *   <li>TC7d-f（R1 复审二轮第一层）：PLATFORM_ADMIN/Platform_Admin/尾空格大小写变体拒绝
+ *       （与生产 collation utf8mb4_unicode_ci 大小写不敏感语义对齐）</li>
+ *   <li>TC8a/b（R1 复审二轮第二层）：反查 t_role 行 tenant_id=0（全局角色）一律 40301
+ *       "平台角色不允许租户侧分配"——不依赖字符串拼写，未来新增平台角色自动防护</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -309,6 +315,128 @@ class UserServiceImplTest {
         assertTrue(ids.isEmpty(), "无匹配角色时应返回空列表");
     }
 
+    // ==================== TC7 平台角色黑名单（M3 安全评审，防租户侧垂直提权） ====================
+
+    /**
+     * TC7a：assignRoles 含 platform_admin → BizException(FORBIDDEN 40301)，
+     * 先于删旧关联执行（不删不插不回填）——防 tenant_admin 给本租户用户自分
+     * platform_admin 后调 U2 订阅修改接口免费转正/延期（绕过试用商业化控制）。
+     */
+    @Test
+    void TC7a_分配角色含platform_admin_403拒绝_不删不插() {
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.assignRoles(TENANT_ID, USER_ID, List.of("tenant_admin", "platform_admin")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode(), "平台角色分配必须 40301 拒绝");
+        assertTrue(ex.getMessage().contains("platform_admin"));
+        // 关键断言：黑名单校验先于任何 DB 写（覆盖式删除/插入/roles 回填零调用）
+        verifyNoInteractions(userMapper);
+        verifyNoInteractions(userRoleMapper);
+    }
+
+    /** TC7b：create roles 含 platform_admin 同样拒绝（提权入口全集：create/update/assignRoles 三口同堵）。 */
+    @Test
+    void TC7b_创建用户含platform_admin_403拒绝_不insert() {
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.create(TENANT_ID, "mallory", "Passw0rd", "M", null, null,
+                        List.of("platform_admin")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode());
+        verify(userMapper, never()).insert(any());
+        verifyNoInteractions(userRoleMapper);
+    }
+
+    /** TC7c：update roles 含 platform_admin 同样拒绝，且先于 getById/updateById 执行。 */
+    @Test
+    void TC7c_更新用户含platform_admin_403拒绝_不update() {
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.update(TENANT_ID, USER_ID, "M", null, List.of("platform_admin")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode());
+        verify(userMapper, never()).updateById(any());
+        verify(userRoleMapper, never()).delete(any());
+    }
+
+    // ========== TC7d-f / TC8：R1 复审二轮（collation 大小写变体 + 角色行层真防御） ==========
+
+    /**
+     * TC7d（R1 第一层）：'PLATFORM_ADMIN' 全大写变体必须拒绝——生产 MySQL collation
+     * utf8mb4_unicode_ci 大小写不敏感（'PLATFORM_ADMIN' = 'platform_admin' 为 TRUE，
+     * in(role_code) 命中全局行 tenant_id=0），Java 端 contains 精确匹配会放行 → 提权链成立。
+     * 单测 H2 大小写敏感测不出，须在应用层用 equalsIgnoreCase 与 DB 语义对齐。
+     */
+    @Test
+    void TC7d_分配角色PLATFORM_ADMIN大写变体_403拒绝_不删不插() {
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.assignRoles(TENANT_ID, USER_ID, List.of("PLATFORM_ADMIN")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode(), "大写变体必须 40301 拒绝（与 DB ci 语义对齐）");
+        assertTrue(ex.getMessage().contains("platform_admin"));
+        // 第一层先于任何 DB 访问（不反查角色、不删不插）
+        verifyNoInteractions(roleMapper);
+        verifyNoInteractions(userRoleMapper);
+    }
+
+    /** TC7e（R1 第一层）：'Platform_Admin' 混合大小写变体同样拒绝。 */
+    @Test
+    void TC7e_分配角色Platform_Admin混合大小写变体_403拒绝() {
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.assignRoles(TENANT_ID, USER_ID, List.of("tenant_admin", "Platform_Admin")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode(), "混合大小写变体必须 40301 拒绝");
+        verifyNoInteractions(userRoleMapper);
+    }
+
+    /** TC7f（R1 第一层）：尾随空格 'platform_admin '（PAD SPACE collation 下亦命中全局行）拒绝。 */
+    @Test
+    void TC7f_创建用户platform_admin尾随空格变体_403拒绝() {
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.create(TENANT_ID, "mallory2", "Passw0rd", "M2", null, null,
+                        List.of("platform_admin ")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode(), "尾随空格变体必须 40301 拒绝");
+        verify(userMapper, never()).insert(any());
+        verifyNoInteractions(userRoleMapper);
+    }
+
+    /**
+     * TC8a（R1 第二层，真防御）：反查命中的 t_role 行 tenant_id=0（系统级全局角色）→
+     * 40301"平台角色不允许租户侧分配"，且先于删旧关联执行。用<b>不在字符串黑名单</b>的
+     * 角色码 'super_ops'（模拟未来新增平台全局角色）证明该层不依赖字符串拼写——
+     * 即使第一层被绕过或黑名单漏配，全局角色行照样被拦。
+     */
+    @Test
+    void TC8a_分配角色行tenantId为0_403拒绝_不删不插() {
+        when(userMapper.selectOne(any())).thenReturn(existingUser());
+        when(roleMapper.selectList(any())).thenReturn(List.of(role(9L, "super_ops", 0L)));
+
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.assignRoles(TENANT_ID, USER_ID, List.of("super_ops")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode(), "全局角色行（tenant_id=0）必须 40301 拒绝");
+        assertTrue(ex.getMessage().contains("平台角色不允许租户侧分配"),
+                "错误信息须含指定文案，实测=" + ex.getMessage());
+        // 关键断言：角色行校验先于任何 DB 写（不删旧关联、不插新关联、不回填 roles）
+        verify(userRoleMapper, never()).delete(any());
+        verify(userRoleMapper, never()).insert(any());
+        verify(userMapper, never()).updateById(any());
+    }
+
+    /** TC8b（R1 第二层）：create 路径反查命中全局角色行同样拒绝（不写 t_user_role 关联）。 */
+    @Test
+    void TC8b_创建用户角色行tenantId为0_403拒绝_不写关联() {
+        when(userMapper.selectCount(any())).thenReturn(0L);
+        when(roleMapper.selectList(any())).thenReturn(List.of(role(9L, "super_ops", 0L)));
+
+        BizException ex = assertThrows(BizException.class,
+                () -> userService.create(TENANT_ID, "mallory3", "Passw0rd", "M3", null, null,
+                        List.of("super_ops")));
+
+        assertEquals(ResultCode.FORBIDDEN, ex.getCode(), "create 路径全局角色行同样 40301 拒绝");
+        assertTrue(ex.getMessage().contains("平台角色不允许租户侧分配"));
+        verify(userRoleMapper, never()).insert(any(UserRole.class));
+    }
+
     // ==================== fixtures ====================
 
     private User existingUser() {
@@ -324,9 +452,16 @@ class UserServiceImplTest {
     }
 
     private Role role(Long id, String code) {
+        // 默认租户自有角色行（tenant_id=本租户）——R1 第二层校验下可正常分配
+        return role(id, code, TENANT_ID);
+    }
+
+    /** R1 第二层用：显式指定角色行 tenant_id（0=系统级全局行，须被拒绝）。 */
+    private Role role(Long id, String code, Long tenantId) {
         Role r = new Role();
         r.setId(id);
         r.setRoleCode(code);
+        r.setTenantId(tenantId);
         return r;
     }
 }
