@@ -69,3 +69,17 @@
 
 ### 技术债处置
 - [IMP-012] 评估关闭（不建索引）：t_derivation 三条查询索引（idx_tenant_case/idx_tenant_role/idx_case_role）全部命中 tenant/case 前缀等值查询，is_deleted 仅作索引后过滤且单 (tenant,case) 组合行数小（几十行）；高写表加索引写放大>收益；与全库 20+ 逻辑删表口径一致。按"按需加索引不按需加列"原则（DBA V5/V6 先例）关闭。
+
+
+## v0.3.0（2026-08-21 Wave2 L3 收口）
+
+### 新需求
+- [REQ-008] 2026-08-21 | L3 收口：GRC 风险合规（风险登记册+合规检查+5×5 热力图看板）+ 投资决策分析（商业案例 ROI/回收期/RICE+投资组合视图）| PRG-001 PRJ-004 尾巴（L3 层全部角色平台承载闭环）| 已交付（case-20260821-L3收口 全链路；V7 真库验证；629 测试绿）
+
+### 缺陷修复（门禁拦截）
+- [BUG-012] t_risk.description 应用层未贯通（DBA 补列后五处缺映射，Reviewer D1 阻断）| 已修复（六点贯通+二审 PASS）
+- [BUG-013] 金额无上限/精度校验（DECIMAL(14,2) 越界严格模式 500/非严格截断，Security S1 中危）| 已修复（scale<=2 + 上限 999999999999.99 前置 400）
+- [BUG-014] T16 strategy-board 关联商业案例只读区漏做（QA D-QA1 阻断，前端边界指令误伤）| 已修复（B1 strategyId 筛选拉取+只读卡片+M-13 联测项）
+
+### 技术债（记录下迭代）
+- S2 编辑审计无前值快照 / S3 transit CAS（eq status,from）/ S4 toJsonRelated 改 ObjectMapper / S5 长度校验前置 / S6 HttpMessageNotReadable→400 / D3 transit TOCTOU / D4 update_by / D5 size=500 截断

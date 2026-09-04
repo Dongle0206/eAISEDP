@@ -205,3 +205,112 @@ MERGE INTO t_role_permission (id, role_id, permission_id) KEY(id) VALUES
   (2162,4,1059),(2163,4,1062),(2164,4,1065),(2165,4,1068),
   -- executive (role 5): 四域只读
   (2166,5,1059),(2167,5,1062),(2168,5,1065),(2169,5,1068);
+
+-- ============ V7（case-20260821-L3收口）：L3 收口三表 + 权限 seed ============
+-- 生产结构以 V7__l3_close.sql 为准，此处为 H2 简化版：
+--   DATETIME→TIMESTAMP、JSON/TEXT→CLOB、无 ENGINE/无 ON UPDATE/无行级 COMMENT。
+--   F1.3 风险看板 / F2.2 投资组合为零 DDL 聚合读 API（无新表），H2 侧无对应动作。
+-- 幂等：建表 IF NOT EXISTS；seed 用 MERGE INTO KEY(id)（同上先例，
+--   避免 spring.sql.init always 模式重跑时主键冲突）。
+CREATE TABLE IF NOT EXISTS t_risk (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT DEFAULT 0,
+  risk_name VARCHAR(200),
+  category VARCHAR(16),
+  probability INT,               -- 生产 TINYINT(1~5)，H2 简化 INT
+  impact INT,
+  risk_value INT,
+  risk_level VARCHAR(16),
+  description CLOB,          -- DBA r2 补列（对齐 V7）
+  mitigation CLOB,
+  contingency_plan CLOB,
+  owner VARCHAR(64),
+  status VARCHAR(16),
+  resolution_note VARCHAR(500),
+  related_objects CLOB,          -- H2 无 JSON，用 CLOB 代替
+  review_date DATE,
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_risk_tenant_name ON t_risk (tenant_id, risk_name);
+CREATE INDEX IF NOT EXISTS idx_risk_tenant_status ON t_risk (tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS t_compliance_check (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT DEFAULT 0,
+  check_name VARCHAR(200),
+  framework VARCHAR(16),
+  framework_name VARCHAR(128),
+  clause_ref VARCHAR(128),
+  description CLOB,
+  result VARCHAR(8),
+  evidence_note VARCHAR(1000),
+  check_date DATE,
+  recheck_date DATE,
+  owner VARCHAR(64),
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_check_tenant_name ON t_compliance_check (tenant_id, check_name);
+
+CREATE TABLE IF NOT EXISTS t_business_case (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT DEFAULT 0,
+  case_name VARCHAR(200),
+  description CLOB,
+  related_strategy_ids CLOB,     -- H2 无 JSON，用 CLOB 代替
+  onetime_cost DECIMAL(14,2),
+  annual_op_cost DECIMAL(14,2),
+  annual_benefit DECIMAL(14,2),
+  net_benefit DECIMAL(14,2),
+  payback_years DECIMAL(16,1),
+  roi_percent DECIMAL(20,2),
+  reach INT,
+  impact INT,
+  confidence DECIMAL(2,1),
+  effort INT,
+  rice_score DECIMAL(10,2),
+  status VARCHAR(16),
+  rejected_reason VARCHAR(500),
+  decision_note CLOB,
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_bizcase_tenant_name ON t_business_case (tenant_id, case_name);
+
+-- V7 权限 seed（与 V7__l3_close.sql 同值：原子 1071~1080 + 授权 2170~2202）
+MERGE INTO t_permission (id, tenant_id, permission_code, permission_name, module, resource_type, action) KEY(id) VALUES
+  (1071, 0, 'risk:view',         '风险查看',     'risk',       'risk',       'view'),
+  (1072, 0, 'risk:create',       '风险创建',     'risk',       'risk',       'create'),
+  (1073, 0, 'risk:edit',         '风险编辑',     'risk',       'risk',       'edit'),
+  (1074, 0, 'compliance:view',   '合规检查查看', 'compliance', 'compliance', 'view'),
+  (1075, 0, 'compliance:create', '合规检查创建', 'compliance', 'compliance', 'create'),
+  (1076, 0, 'compliance:edit',   '合规检查编辑', 'compliance', 'compliance', 'edit'),
+  (1077, 0, 'bizcase:view',      '商业案例查看', 'bizcase',    'bizcase',    'view'),
+  (1078, 0, 'bizcase:create',    '商业案例创建', 'bizcase',    'bizcase',    'create'),
+  (1079, 0, 'bizcase:edit',      '商业案例编辑', 'bizcase',    'bizcase',    'edit'),
+  (1080, 0, 'bizcase:approve',   '商业案例审批', 'bizcase',    'bizcase',    'approve');
+
+MERGE INTO t_role_permission (id, role_id, permission_id) KEY(id) VALUES
+  -- platform_admin (role 1): 10 项全量
+  (2170,1,1071),(2171,1,1072),(2172,1,1073),(2173,1,1074),(2174,1,1075),
+  (2175,1,1076),(2176,1,1077),(2177,1,1078),(2178,1,1079),(2179,1,1080),
+  -- tenant_admin (role 2): 10 项全量（GRC/Strategy 兼任，裁决 Q5）
+  (2180,2,1071),(2181,2,1072),(2182,2,1073),(2183,2,1074),(2184,2,1075),
+  (2185,2,1076),(2186,2,1077),(2187,2,1078),(2188,2,1079),(2189,2,1080),
+  -- project_manager (role 3): 7 项（risk×3 + compliance:view + bizcase×3 无 approve，裁决 Q6）
+  (2190,3,1071),(2191,3,1072),(2192,3,1073),(2193,3,1074),(2194,3,1077),
+  (2195,3,1078),(2196,3,1079),
+  -- engineer (role 4): 三域只读
+  (2197,4,1071),(2198,4,1074),(2199,4,1077),
+  -- executive (role 5): 三域只读
+  (2200,5,1071),(2201,5,1074),(2202,5,1077);
