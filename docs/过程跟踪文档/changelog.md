@@ -57,3 +57,15 @@
 - [IMP-016] sanitize.js 公共 XSS 清洗 + governance-dict.js 前端字典集中（P6）
 - [IMP-017] U2 租户订阅恢复端点 + 试用到期恢复runbook（一行 SQL 5 分钟恢复）
 - [IMP-018] R2-R4 XSS 残余加固（中缀控制字符/base 标签/CSS 面）→ PRJ-006 backlog
+
+
+## v0.2.1（2026-08-20 Wave3 工程债：XSS 加固收尾）
+
+### 缺陷修复（安全复审 R2~R4 残余清零）
+- [BUG-009] 2026-08-20 | R2 协议中缀控制字符绕过：href="java\tscript:" 经浏览器 URL 解析等价 javascript:，字符串 startsWith 判不出 | 状态：已修复（sanitize.js 归一剥 \x00-\x20\x7f 后按协议白名单判定：http/https/mailto/ftp/相对路径/data:image(排除 svg+xml)）
+- [BUG-010] 2026-08-20 | R3 向量面：base 劫持相对 URL / svg xlink:href 与内嵌脚本 / MathML 事件属性 | 状态：已修复（标签黑名单 +base/svg/math/frame/frameset/applet，属性黑名单 +xlink:href）
+- [BUG-011] 2026-08-20 | R4 CSS 面：style 属性钓鱼 UI/老浏览器 url(javascript:) | 状态：已修复（属性黑名单 +style/formaction/srcdoc/srcset）
+- 改进：case-detail/artifact-view 内联 sanitizeHtml 收敛为公共 sanitize.js（消除三处重复同弱点半径，未加载时 try-catch 降级纯文本）
+
+### 技术债处置
+- [IMP-012] 评估关闭（不建索引）：t_derivation 三条查询索引（idx_tenant_case/idx_tenant_role/idx_case_role）全部命中 tenant/case 前缀等值查询，is_deleted 仅作索引后过滤且单 (tenant,case) 组合行数小（几十行）；高写表加索引写放大>收益；与全库 20+ 逻辑删表口径一致。按"按需加索引不按需加列"原则（DBA V5/V6 先例）关闭。

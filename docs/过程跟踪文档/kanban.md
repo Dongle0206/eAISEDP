@@ -4,7 +4,6 @@
 
 ## Todo
 - [ ] Wave2 L3 收口：GRC 风险合规 + 投资决策分析（PRJ-004 尾巴，PO 已排队）
-- [ ] Wave3 工程债 V7：IMP-012（t_derivation.deleted 索引）+ R2-R4 XSS 残余加固
 - [ ] Wave4 企业资产适配：MCP 真实适配器（Jira/Confluence/GitLab，Mock+契约先行）
 - [ ] Wave5 商用化：订阅/计费/SLA（PRJ-006，含 U2 白名单模式/平台角色体系重构 IMP-018）
 - [ ] 测试机环境重搭：原生 MySQL（deploy\setup_mysql_native.bat 已备）+ #22 联测
@@ -13,6 +12,7 @@
 - [ ] [L1-QA] case-20260820-L2治理收口 验收测试（31 AC 用例矩阵 + 人工联测清单）
 
 ## Done（最近）
+- [x] [Wave3 工程债] R2~R4 XSS 加固清零（sanitize.js 协议白名单+向量面+CSS 面；两先例页收敛公共版）+ IMP-012 评估关闭（索引全命中，写放大>收益，见 changelog v0.2.1）| #23 部署脚本
 - [x] [case-20260820-L2治理收口] 全链路交付：PO（31 AC）→ 裁决 Q1~Q11 → SE（25 端点/governance 包/双点拦截）→ DBA（V6 已真实 MySQL 验证：V1→V6 链+幂等重放）→ BA（24 任务四批）→ Dev×4 批（492→503→508 全绿）→ Reviewer PASS（0 阻断/3 建议/3 可选全修）→ Security 三轮（FAIL→FAIL→PASS：拦下存储型 XSS 高危 + ci collation 提权绕过，7 载荷 0 存活）
 - [x] [F3 商用硬伤] 试用到期拦截：登录 40003 + 临期三档 + 派生/编排/retry 三入口 + U2 恢复路径 + runbook
 - [x] [F1/F2] 标准库（多版本+门禁打通）/ 模板库 / 数据资产 / 质量规则 四域 + 前端 4 页 + RBAC（1059~1070）
