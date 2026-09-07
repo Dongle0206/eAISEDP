@@ -100,8 +100,10 @@ eaiselp:
         api-key: ${DEEPSEEK_API_KEY:}
         base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
       mcp:                                                                     # M4-2 MCP 集成深化：HttpMCPAdapter 通过 HTTP+JSON-RPC 2.0 对接外部 MCP Server
-        enabled: ${MCP_ENABLED:false}                                          # 默认关闭；启用后 HttpMCPAdapter/StubMCPAdapter 装配，按 server-url 非空判定可用
-        server-url: ${MCP_SERVER_URL:http://localhost:3001/mcp}                # MCP Server JSON-RPC 端点（空字符串则 isAvailable=false 走降级）
+        enabled: ${MCP_ENABLED:false}                                          # 默认关闭；启用后按 provider 装配对应 MCPAdapter，按 server-url 非空判定可用
+        provider: ${MCP_PROVIDER:mock}                                         # case-20260822-MCPMock 裁决 Q1：mock（默认）=内置 MockMCPProvider 三源 9 工具内存模拟，无需外部 server；
+                                                                               #   http =对接真实 MCP Server（须同时配 server-url）；切换仅改配置不改代码（AC-11 零改动替换）
+        server-url: ${MCP_SERVER_URL:http://localhost:3001/mcp}                # MCP Server JSON-RPC 端点（仅 provider=http 使用；空字符串则 isAvailable=false 走降级）
   async:                                                                       # M2-DFX LLM 异步线程池（SE §4.3.2 / §7），外置便于调参不重打包
     llm:
       core: 5                                                                  # core 设低防突发烧光配额；与 LLM provider QPS 限额挂钩（SE §10 D-2）

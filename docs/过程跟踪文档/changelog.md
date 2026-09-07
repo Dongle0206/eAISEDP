@@ -83,3 +83,15 @@
 
 ### 技术债（记录下迭代）
 - S2 编辑审计无前值快照 / S3 transit CAS（eq status,from）/ S4 toJsonRelated 改 ObjectMapper / S5 长度校验前置 / S6 HttpMessageNotReadable→400 / D3 transit TOCTOU / D4 update_by / D5 size=500 截断
+
+
+## v0.3.1（2026-08-22 Wave4 MCP Mock 演示层，fast 档）
+
+### 新需求
+- [REQ-009] 2026-08-22 | MCP Mock 演示层（PRJ-005 前置）：MockMCPProvider 三源 9 工具（Jira/Confluence/GitLab，命名空间式）+ 租户分桶内存隔离 + `__mock:true` 标识 + mcp.html 目录/动态表单试调用/原始报文折叠 + JSON-RPC 2.0 契约回环固化（真实 server 上线零改动替换）| provider 配置化（mock 默认/http，AllNestedConditions 条件装配）| 已交付（656 测试绿 +27，双门禁 PASS，QA 代验 PASS）
+
+### 缺陷修复
+- [BUG-015] per-租户 id 序列跨租户重号（隔离语义依赖数据巧合）| Dev 自抓已修（进程级唯一 id + 断言固化）
+
+### 技术债（记录）
+- S1 invoke 参数长度上限 + 全局 body 限制（PRG-005 前）| S2 X-Tenant-Id fail-closed（既有）| S3 mcp:invoke 独立权限点（PRG-005）| S4/S5 错误文案固定/每桶上限 | Reviewer D1 升级注记已写入 #25 | D2 原始报文前端重构标注

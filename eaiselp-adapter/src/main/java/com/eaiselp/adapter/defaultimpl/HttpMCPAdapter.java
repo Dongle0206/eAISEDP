@@ -5,7 +5,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.AllNestedConditions;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
+import org.springframework.context.annotation.ConfigurationCondition.ConfigurationPhase;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpRequestFactory;
@@ -44,18 +47,37 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p><b>实现手法</b>：Spring 6.1 {@link RestClient} + Jackson 手写 HTTP，零新增 Maven 坐标
  * （与 {@link DeepSeekLlmAdapter} 一致；spring-boot-starter-web 间接引入 RestClient）。
  *
- * <p><b>条件装配</b>：仅当 {@code eaiselp.adapter.mcp.enabled=true} 时生效（默认不启用，
- * 企业接入真实 MCP server 时配 {@code MCP_ENABLED=true} + {@code MCP_SERVER_URL}）。
- * 与 {@link StubMCPAdapter} 互斥（同一 {@code enabled} 开关，二者仅一个真实生效——
- * Stub 的 {@code isAvailable()} 恒 false，HttpMCPAdapter 在 server-url 非空时可用，
+ * <p><b>条件装配</b>（case-20260822-MCPMock 裁决 Q1）：需
+ * {@code eaiselp.adapter.mcp.enabled=true}（总开关，默认 false 不变）<b>且</b>
+ * {@code eaiselp.adapter.mcp.provider=http}（无 matchIfMissing——provider 缺省为 mock，
+ * 装配 {@link MockMCPProvider}，二者按 provider 互斥；见 {@link ProviderHttpCondition}，
+ * AllNestedConditions 组合两个 {@code @ConditionalOnProperty}，AND 语义）。
+ * 企业接入真实 MCP server 时配 {@code MCP_ENABLED=true} + {@code MCP_PROVIDER=http}
+ * + {@code MCP_SERVER_URL}。与 {@link StubMCPAdapter} 共存于 enabled 开关下
+ * （Stub 的 {@code isAvailable()} 恒 false，本类在 server-url 非空时可用，
  * {@code DefaultAdapterFactory#pick} 按 {@code isAvailable()} 选首个可用者）。
  *
  * <p>遵循 ES-003 §9.7 P7：新代码调外部工具必经 Adapter SPI，不绕过直接 HTTP 散落业务层。
  */
 @Slf4j
 @Component
-@ConditionalOnProperty(name = "eaiselp.adapter.mcp.enabled", havingValue = "true")
+@Conditional(HttpMCPAdapter.ProviderHttpCondition.class)
 public class HttpMCPAdapter implements MCPAdapter {
+
+    /**
+     * 装配条件（AND）：enabled=true 且 provider=http（无 matchIfMissing——缺省走 mock，
+     * 裁决 Q1）。用 {@link AllNestedConditions} 组合两个 {@code @ConditionalOnProperty}
+     * （Boot 3.2 该注解不可重复，嵌套条件类是标准替代写法）。
+     */
+    static class ProviderHttpCondition extends AllNestedConditions {
+        ProviderHttpCondition() { super(ConfigurationPhase.REGISTER_BEAN); }
+
+        @ConditionalOnProperty(name = "eaiselp.adapter.mcp.enabled", havingValue = "true")
+        static class Enabled { }
+
+        @ConditionalOnProperty(name = "eaiselp.adapter.mcp.provider", havingValue = "http")
+        static class ProviderHttp { }
+    }
 
     /** MCP Server URL（如 {@code http://localhost:3001/mcp}）。空则 {@link #isAvailable()} 返回 false。 */
     @Value("${eaiselp.adapter.mcp.server-url:}")

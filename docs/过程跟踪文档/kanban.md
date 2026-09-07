@@ -11,6 +11,7 @@
 - [ ] [L1-QA] case-20260820-L2治理收口 验收测试（31 AC 用例矩阵 + 人工联测清单）
 
 ## Done（最近）
+- [x] [Wave4 MCPMock] case-20260822 fast 档全链路：PO(11AC)→裁决Q1~Q5→单Dev全栈(656绿+27,自抓跨租户id重号)→Reviewer PASS(0阻断,provider切换D1注记)→Security PASS(0阻断)→QA代验PASS→#25 | PRJ-005 前置闭口
 - [x] [Wave2 L3收口] case-20260821 全链路：PO(34AC)→裁决Q1~Q9→SE(20端点/双计算器/消解表)→DBA(V7真库验证)→BA(19任务)→双Dev(后端36文件+前端3页)→Reviewer二审PASS(D1贯通修复)→Security PASS(S1金额上限修)→QA 629绿(D-QA1 T16修复)→#24部署脚本 | L3层全部角色平台承载闭环
 - [x] [Wave3 工程债] R2~R4 XSS 加固清零（sanitize.js 协议白名单+向量面+CSS 面；两先例页收敛公共版）+ IMP-012 评估关闭（索引全命中，写放大>收益，见 changelog v0.2.1）| #23 部署脚本
 - [x] [case-20260820-L2治理收口] 全链路交付：PO（31 AC）→ 裁决 Q1~Q11 → SE（25 端点/governance 包/双点拦截）→ DBA（V6 已真实 MySQL 验证：V1→V6 链+幂等重放）→ BA（24 任务四批）→ Dev×4 批（492→503→508 全绿）→ Reviewer PASS（0 阻断/3 建议/3 可选全修）→ Security 三轮（FAIL→FAIL→PASS：拦下存储型 XSS 高危 + ci collation 提权绕过，7 载荷 0 存活）
