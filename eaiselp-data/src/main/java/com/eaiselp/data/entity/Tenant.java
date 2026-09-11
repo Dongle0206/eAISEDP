@@ -51,6 +51,16 @@ public class Tenant extends BaseEntity {
      */
     private Boolean programProjectEnabled;
 
+    /**
+     * 绑定套餐编码（V8 case-20260823-商用化 加列，引用 t_plan.code 逻辑外键应用层校验）。
+     *
+     * <p>NULL=未绑套餐（trial 不绑，AC-G2）；绑定/换绑仅经套餐应用（U2 扩展
+     * SubscriptionApplyService.applyPlan 单事务生效，AC-F1.5）。U2 裸通道（不传 planCode/
+     * planId）不动本列（D-13 前半——单字段语义零副作用）；出账遇到"edition≠trial 且
+     * plan_code 为空"跳过不出 0 元账单（D-13 后半）。</p>
+     */
+    private String planCode;
+
     /** 覆盖父类 tenantId：t_tenant 表无此列 */
     @TableField(exist = false)
     private Long tenantId;

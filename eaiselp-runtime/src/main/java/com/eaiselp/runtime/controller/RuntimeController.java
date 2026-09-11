@@ -10,6 +10,7 @@ import com.eaiselp.common.security.LoginUser;
 import com.eaiselp.common.tenant.TenantContext;
 import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.data.service.TenantSubscriptionService;
+import com.eaiselp.data.service.subscription.SubscriptionPlanService;
 import com.eaiselp.runtime.context.DerivationContext;
 import com.eaiselp.runtime.engine.DerivationEngine;
 import com.eaiselp.runtime.orchestration.OrchestrationService;
@@ -66,6 +67,13 @@ public class RuntimeController {
     private final CodeValidationService codeValidationService;
     /** case-20260820 F3（T20）：试用到期前置校验（eaiselp-data 共享口径） */
     private final TenantSubscriptionService subscriptionService;
+    /**
+     * case-20260823-商用化 T6（D-10）：模型档位 enforcement——派生入口实时解析
+     * t_tenant.plan_code → t_plan.features.model_tiers 校验请求 tier（40004）。
+     * 构造器注入（@InjectMocks 运行时注入；既有纯 Mockito 测试未声明 mock 时为 null →
+     * 挂点 null 防御放行，R7——不因测试环境锁死派生主链路）。
+     */
+    private final SubscriptionPlanService planService;
 
     /**
      * 手动派生单角色（M2-DFX 异步化：立即返回 taskId）。
@@ -92,6 +100,10 @@ public class RuntimeController {
         // ①.5 [T20 F3] 试用到期前置校验（SE §4.3：参数校验后、资源预占前）——
         // 存量 JWT 24h 窗口的 token 烧刷口补位：到期 40003，不 createPending、不烧 token
         assertTrialNotExpired("derive_trial_blocked");
+        // ①.6 [case-20260823 T6/D-10] 模型档位 enforcement：绑定套餐租户请求 tier
+        // ∉ features.model_tiers → 40004（与 assertTrialNotExpired 同挂点同形态；
+        // 未绑定/trial 不限，解析失败防御放行，零缓存即时生效 AC-F1.7）
+        assertModelTierAllowed(resolveDeriveTier(req, agent), "derive_tier_blocked");
         DerivationContext ctx = DerivationContext.builder()
                 .task(req.getTask()).stage(req.getStage()).build();
         // ② 预占 DB 行拿 taskId（createPending 内部 INSERT pending + 内存 put）
@@ -140,6 +152,8 @@ public class RuntimeController {
         private String task;
         private String caseId;
         private String stage;
+        /** case-20260823 T6（D-10）：显式模型档位（opus/sonnet/haiku/...，可选；缺省取角色定义档位） */
+        private String modelTier;
     }
 
     // ======================== 编排模式 ========================
@@ -161,6 +175,9 @@ public class RuntimeController {
         // [T20 F3] 试用到期前置校验（SE §4.3：requirement 校验后、start 之前）——
         // 到期 40003，不 start、不预占编排行、不烧 token
         assertTrialNotExpired("orchestrate_trial_blocked");
+        // [case-20260823 T6/D-10] 模型档位 enforcement（编排多角色档位混合，仅校验显式指定的
+        // modelTier；未指定 → 放行——编排内部按 orchestrator 档位路由，无法单点前置校验）
+        assertModelTierAllowed(req.getModelTier(), "orchestrate_tier_blocked");
         Long tenantId = TenantContext.get();
         Long orchId = orchestrationService.start(req.getRequirement(), req.getCaseId(), req.getTier());
         auditService.log("orchestrate_start", "case", req.getCaseId(),
@@ -364,6 +381,50 @@ public class RuntimeController {
         }
     }
 
+    /**
+     * [case-20260823 T6/D-10] 模型档位 enforcement（与 assertTrialNotExpired 同挂点同形态）。
+     *
+     * <p>实时解析 {@code t_tenant.plan_code → t_plan.features.model_tiers}：请求 tier ∉ tiers →
+     * {@code BizException(40004)} + 审计 failure；∈ tiers 放行。防御放行（R7——不因计费配置
+     * 锁死派生主链路）：tier 为空（无档位上下文）/planService 不可用（纯 Mockito 测试环境）/
+     * 未绑定套餐或 trial（现状回归）/套餐解析失败——一律 WARN 放行。零缓存即时生效（AC-F1.7）。</p>
+     */
+    private void assertModelTierAllowed(String tier, String blockedAction) {
+        if (tier == null || tier.isBlank() || planService == null) {
+            return;
+        }
+        Long tenantId = TenantContext.get();
+        try {
+            planService.assertModelTierAllowed(tenantId, tier.trim());
+        } catch (BizException e) {
+            JwtClaims claims = LoginUser.get();
+            auditService.log(blockedAction, "tenant",
+                    tenantId != null ? String.valueOf(tenantId) : null,
+                    "{\"tenantId\":" + tenantId
+                            + ",\"tier\":\"" + safeJson(tier) + "\""
+                            + ",\"username\":\"" + safeJson(claims != null ? claims.getUsername() : null) + "\"}",
+                    "failure", e.getMessage());
+            log.warn("[Tier] {} 派生入口拦截（40004）: tenantId={}, tier={}, username={}",
+                    blockedAction, tenantId, tier, claims != null ? claims.getUsername() : null);
+            throw e;
+        } catch (Exception e) {
+            // 防御放行（D-10/R7）：仅"绑定且 tiers 明确不含"才 40004，其余异常不拦派生主链路
+            log.warn("[Tier] {} 模型档位校验异常，防御放行: tenantId={}, tier={}, err={}",
+                    blockedAction, tenantId, tier, e.getMessage());
+        }
+    }
+
+    /**
+     * /derive 的档位取值：显式 modelTier 优先；否则取 agent 定义档位（与 DerivationEngine
+     * 同源：agent.getModel() 缺省 "sonnet"）。
+     */
+    private String resolveDeriveTier(DeriveRequest req, AgentDefinition agent) {
+        if (req.getModelTier() != null && !req.getModelTier().isBlank()) {
+            return req.getModelTier().trim();
+        }
+        return agent != null && agent.getModel() != null ? agent.getModel() : "sonnet";
+    }
+
     /** 转义 JSON 字符串（审计 detail 防注入）。 */
     private String safeJson(String s) {
         if (s == null) return "";
@@ -379,5 +440,7 @@ public class RuntimeController {
         private String caseId;
         /** 模式：fast（默认，6步）/ standard（预留） */
         private String tier;
+        /** case-20260823 T6（D-10）：显式模型档位（可选；与 tier 编排模式语义不同） */
+        private String modelTier;
     }
 }

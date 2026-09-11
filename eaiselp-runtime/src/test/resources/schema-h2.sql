@@ -314,3 +314,119 @@ MERGE INTO t_role_permission (id, role_id, permission_id) KEY(id) VALUES
   (2197,4,1071),(2198,4,1074),(2199,4,1077),
   -- executive (role 5): 三域只读
   (2200,5,1071),(2201,5,1074),(2202,5,1077);
+
+-- ============ V8（case-20260823-商用化）：套餐/账单/事故三表 + t_tenant 简化表 + 权限 seed ============
+-- 生产结构以 V8__commercialization.sql 为准，此处为 H2 简化版：
+--   DATETIME→TIMESTAMP、JSON/TEXT→CLOB、TINYINT→INT、无 ENGINE/无 ON UPDATE/无行级 COMMENT。
+--   t_tenant 此前未入 H2（V8 前无测试诉求），本期按"plan_code 列追加"诉求建最小列集（含
+--   plan_code 直建于建表 DDL——H2 无存量列场景，IF NOT EXISTS 兜底即可，生产侧仍走
+--   information_schema 动态判断 ALTER）；生产结构以 V1 为准。
+-- 幂等：建表 IF NOT EXISTS；seed 用 MERGE INTO KEY(id)（同上先例，
+--   避免 spring.sql.init always 模式重跑时主键冲突）。
+CREATE TABLE IF NOT EXISTS t_plan (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT DEFAULT 0,
+  code VARCHAR(32),
+  name VARCHAR(200),
+  monthly_price DECIMAL(14,2),
+  token_overage_price DECIMAL(12,6),   -- 6 位小数支撑低单价（AC-F2.5 构造例 0.335），生产同宽
+  features CLOB,                       -- H2 无 JSON，用 CLOB 代替
+  sla_level VARCHAR(16),
+  edition_override VARCHAR(16),       -- custom 套餐生效档位（code=custom 必填，D-9；其余 NULL），生产同宽
+  enabled INT DEFAULT 1,
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_plan_name ON t_plan (name);
+CREATE INDEX IF NOT EXISTS idx_plan_code ON t_plan (code);
+
+CREATE TABLE IF NOT EXISTS t_invoice (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT DEFAULT 0,
+  period CHAR(7),
+  plan_code VARCHAR(32),
+  plan_price DECIMAL(14,2),
+  usage_tokens BIGINT DEFAULT 0,
+  overage_tokens BIGINT DEFAULT 0,
+  overage_amount DECIMAL(14,2) DEFAULT 0,
+  proration_amount DECIMAL(14,2) DEFAULT 0,   -- Q6 首月按天折算实收月费，非折算 0.00
+  total_amount DECIMAL(14,2),
+  detail CLOB,                                -- H2 无 JSON，用 CLOB 代替
+  status VARCHAR(16) DEFAULT 'draft',
+  issued_time TIMESTAMP,
+  paid_time TIMESTAMP,
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_invoice_tenant_period ON t_invoice (tenant_id, period);
+CREATE INDEX IF NOT EXISTS idx_invoice_period_status ON t_invoice (period, status);
+
+CREATE TABLE IF NOT EXISTS t_incident (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_id BIGINT DEFAULT 0,
+  title VARCHAR(200),
+  occurred_time TIMESTAMP,
+  recovery_time TIMESTAMP,          -- 空=未恢复（展示口径，无状态机）
+  impact_desc VARCHAR(1000),
+  root_cause VARCHAR(1000),
+  sla_breach INT DEFAULT 0,         -- 生产 TINYINT，H2 简化 INT
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_incident_tenant_time ON t_incident (tenant_id, occurred_time);
+
+CREATE TABLE IF NOT EXISTS t_tenant (
+  id BIGINT NOT NULL PRIMARY KEY,
+  tenant_code VARCHAR(64),
+  tenant_name VARCHAR(200),
+  edition VARCHAR(16) DEFAULT 'pro',
+  status VARCHAR(16) DEFAULT 'active',
+  expire_time TIMESTAMP,
+  plan_code VARCHAR(32),            -- V8 追加列（生产走动态判断 ALTER，H2 直建）
+  create_time TIMESTAMP,
+  update_time TIMESTAMP,
+  create_by VARCHAR(64),
+  update_by VARCHAR(64),
+  is_deleted INT DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_tenant_code ON t_tenant (tenant_code);
+
+-- V8 套餐 seed（与 V8__commercialization.sql 同值：官方三档 101~103，占位定价，运营页面上改）
+MERGE INTO t_plan (id, tenant_id, code, name, monthly_price, token_overage_price, features, sla_level, enabled) KEY(id) VALUES
+  (101, 0, 'starter',    '入门版', 299.00, 12.000000, '{"max_users":10,"max_cases":20,"token_limit":1000000,"case_limit":20,"derivation_limit":200,"storage_limit_mb":10240,"layer_overrides":{"strategy_enabled":1,"program_project_enabled":1},"model_tiers":["haiku"]}', 'bronze', 1),
+  (102, 0, 'pro',        '专业版', 999.00,  8.000000, '{"max_users":50,"max_cases":100,"token_limit":5000000,"case_limit":100,"derivation_limit":1000,"storage_limit_mb":51200,"layer_overrides":{"strategy_enabled":1,"program_project_enabled":1},"model_tiers":["sonnet","haiku"]}', 'silver', 1),
+  (103, 0, 'enterprise', '企业版', 4999.00, 6.000000, '{"max_users":200,"max_cases":500,"token_limit":20000000,"case_limit":500,"derivation_limit":5000,"storage_limit_mb":204800,"layer_overrides":{"strategy_enabled":1,"program_project_enabled":1},"model_tiers":["opus","sonnet","haiku"]}', 'gold', 1);
+
+-- V8 权限 seed（与 V8__commercialization.sql 同值：原子 1081~1089 + 授权 2203~2220）
+MERGE INTO t_permission (id, tenant_id, permission_code, permission_name, module, resource_type, action) KEY(id) VALUES
+  (1081, 0, 'plan:view',       '套餐查看',     'plan',     'plan',     'view'),
+  (1082, 0, 'plan:create',     '套餐创建',     'plan',     'plan',     'create'),
+  (1083, 0, 'plan:edit',       '套餐编辑',     'plan',     'plan',     'edit'),
+  (1084, 0, 'bill:view',       '平台账单查看', 'bill',     'bill',     'view'),
+  (1085, 0, 'bill:manage',     '账单状态流转', 'bill',     'bill',     'manage'),
+  (1086, 0, 'cost:view',       '费用中心查看', 'cost',     'cost',     'view'),
+  (1087, 0, 'incident:view',   '事故查看',     'incident', 'incident', 'view'),
+  (1088, 0, 'incident:create', '事故登记',     'incident', 'incident', 'create'),
+  (1089, 0, 'incident:edit',   '事故编辑',     'incident', 'incident', 'edit');
+
+MERGE INTO t_role_permission (id, role_id, permission_id) KEY(id) VALUES
+  -- platform_admin (role 1): 9 项全量（套餐+账单专属）
+  (2203,1,1081),(2204,1,1082),(2205,1,1083),(2206,1,1084),(2207,1,1085),
+  (2208,1,1086),(2209,1,1087),(2210,1,1088),(2211,1,1089),
+  -- tenant_admin (role 2): 4 项（费用中心 + 事故全操作）
+  (2212,2,1086),(2213,2,1087),(2214,2,1088),(2215,2,1089),
+  -- project_manager (role 3): 3 项（事故登记协作，无 cost:view——裁决 Q5）
+  (2216,3,1087),(2217,3,1088),(2218,3,1089),
+  -- engineer (role 4): 事故只读
+  (2219,4,1087),
+  -- executive (role 5): 事故只读（费用中心不可见——裁决 Q5）
+  (2220,5,1087);

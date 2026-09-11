@@ -53,6 +53,16 @@ public class TenantController {
     private final TenantProvisionService tenantProvisionService;
     /** case-20260820 F3（T22）：订阅状态查询/修改（口径复用 eaiselp-data 共享判定） */
     private final TenantSubscriptionService subscriptionService;
+    /**
+     * case-20260823-商用化 T4：套餐应用编排（U2 planCode/planId 分叉 + U1 出参扩展填充）。
+     *
+     * <p><b>字段注入而非构造器注入（刻意）</b>：case-20260820 既有 TenantControllerTest 以
+     * {@code new TenantController(...)} 8 参构造直调——AC-F1.8/T5"存量用例零改动通过"是合并
+     * 门禁，构造器签名追加参数会使既有测试编译失败。@Autowired(required=false) 保持构造器
+     * 签名稳定：Spring 环境恒注入（runtime 组件扫描），纯 Mockito 环境为 null 走既有路径。</p>
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.eaiselp.runtime.subscription.SubscriptionApplyService subscriptionApplyService;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder(12);
 
     /**
@@ -181,7 +191,9 @@ public class TenantController {
      * U1：查询当前租户订阅状态（AC-F3.5）。
      *
      * <p>tenant_admin / platform_admin 可访问，其他角色 40301；tenant_id 取自 JWT claims（防伪造）。
-     * daysLeft/expired 与登录口径同源（TenantSubscriptionService，PRD §4.3.1 唯一口径）。</p>
+     * daysLeft/expired 与登录口径同源（TenantSubscriptionService，PRD §4.3.1 唯一口径）。
+     * case-20260823-商用化 T4：出参向前兼容扩展 planCode/planName/slaLevel 三字段
+     * （未绑定/trial → 三 null；填充走 SubscriptionApplyService.fillPlanSnapshot）。</p>
      */
     @GetMapping("/subscription")
     public R<TenantSubscriptionService.SubscriptionStatus> getSubscription() {
@@ -192,14 +204,28 @@ public class TenantController {
         if (!hasAnyRole(claims, "tenant_admin", "platform_admin")) {
             return R.fail(ResultCode.FORBIDDEN, "无权查看订阅状态（仅 tenant_admin/platform_admin）");
         }
-        return R.ok(subscriptionService.getSubscriptionStatus(claims.getTenantId()));
+        TenantSubscriptionService.SubscriptionStatus status =
+                subscriptionService.getSubscriptionStatus(claims.getTenantId());
+        if (subscriptionApplyService != null) {
+            subscriptionApplyService.fillPlanSnapshot(claims.getTenantId(), status);
+        }
+        return R.ok(status);
     }
 
     /**
      * U2：修改租户订阅（恢复路径，AC-F3.6）——仅 platform_admin（tenant_admin 40301）。
      *
-     * <p>入参 {edition?, expireTime?}：null=不变（单字段更新）；expireTime 空串=置空（Q4"未设置"）。
-     * 审计 tenant_edition_change（detail 含旧→新与操作者）；服务零缓存，修改后下次登录即生效。</p>
+     * <p>case-20260823-商用化 T4 扩展（D-8 分叉点唯一——入参判空）：
+     * <ul>
+     *   <li><b>planId/planCode 任一非空 → 套餐应用模式</b>（SubscriptionApplyService.applyPlan
+     *       单事务五类落库，AC-F1.5）：此时 edition/expireTime 必须为空（同传 400 互斥，显式优于
+     *       隐式）；planId 数字主键优先（存在时 planCode 忽略，编排者追加裁决）；planCode 命中
+     *       多份 enabled custom 套餐 → 40004 指明"请用 planId 精确指定"。</li>
+     *   <li><b>planId/planCode 均空 → 既有 updateSubscription 路径逐行为零变化</b>（AC-F1.8，
+     *       存量用例零改动；且不动 t_tenant.plan_code 列，D-13——分叉仅"判空"一处）。</li>
+     *   <li>四者全空 → 400（既有"至少提供一个"语义承载）。</li>
+     * </ul>
+     * 审计 tenant_edition_change（套餐应用 detail 含五类快照 old→new + 操作者，AC-F1.6）。</p>
      */
     @PutMapping("/{id}/subscription")
     public R<TenantSubscriptionService.SubscriptionStatus> updateSubscription(
@@ -210,6 +236,16 @@ public class TenantController {
         }
         if (!hasAnyRole(claims, "platform_admin")) {
             return R.fail(ResultCode.FORBIDDEN, "仅 platform_admin 可修改租户订阅");
+        }
+        boolean planMode = (req.getPlanId() != null)
+                || (req.getPlanCode() != null && !req.getPlanCode().isBlank());
+        if (planMode) {
+            // D-8 互斥：套餐应用模式下 edition/expireTime 必须为空（非 null 即拒——空串也是传值）
+            if (req.getEdition() != null || req.getExpireTime() != null) {
+                return R.fail(400, "planCode/planId 与 edition/expireTime 互斥，不可同传"
+                        + "（套餐应用模式 expire 自动置空，无需单独传）");
+            }
+            return R.ok(subscriptionApplyService.applyPlan(id, req.getPlanId(), req.getPlanCode()));
         }
         return R.ok(subscriptionService.updateSubscription(id, req.getEdition(), req.getExpireTime()));
     }
@@ -243,5 +279,9 @@ public class TenantController {
         private String edition;
         /** yyyy-MM-dd HH:mm:ss；null=不变；空串=置空（Q4"未设置"语义） */
         private String expireTime;
+        /** case-20260823-商用化 T4：套餐编码（可选；与 edition/expireTime 互斥；custom 岐义 40004 请用 planId） */
+        private String planCode;
+        /** case-20260823-商用化（编排者追加）：套餐数字主键（可选，优先——存在时 planCode 忽略） */
+        private Long planId;
     }
 }

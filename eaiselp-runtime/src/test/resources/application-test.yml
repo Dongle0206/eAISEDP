@@ -37,6 +37,11 @@ mybatis-plus:
 eaiselp:
   tenant:
     mode: shared
+  # case-20260823-商用化 T8（D-6）：关闭月度出账定时任务（CapabilityLoader auto-refresh 先例
+  # 升级为 bean 级 @ConditionalOnProperty 关闭）——测试上下文无 BillingGenerationTask bean；
+  # 出账逻辑由 QA/单测直调 InvoiceService.generatePeriod 断言（AC 不绑定触发方式，裁决 Q2）
+  billing:
+    scheduler-enabled: false
   artifact:                                  # SP-4 产物类型映射（与生产 application.yml 对齐）
     default-type: other
     type-mapping:

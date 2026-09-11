@@ -95,3 +95,16 @@
 
 ### 技术债（记录）
 - S1 invoke 参数长度上限 + 全局 body 限制（PRG-005 前）| S2 X-Tenant-Id fail-closed（既有）| S3 mcp:invoke 独立权限点（PRG-005）| S4/S5 错误文案固定/每桶上限 | Reviewer D1 升级注记已写入 #25 | D2 原始报文前端重构标注
+
+
+## v0.4.0（2026-08-24 Wave5 商用化——PRJ-006 闭口，PRG-001 全部子项目交付）
+
+### 新需求
+- [REQ-010] 2026-08-24 | 商用化闭环：订阅计划（套餐定义/U2 扩展五类一事务/平台管理页）+ 计量账单（月度定时出账/超量计费/首月按天折算/三态流转/手动补生成/费用中心）+ SLA（套餐等级承诺/事故登记）| PRJ-006 | 已交付（V8 真库验证+743 测试绿+双门禁）
+
+### 缺陷修复（门禁拦截）
+- [BUG-016] V8 t_plan 漏 edition_override 列（DBA 缺口，测试 hack 掩盖，生产必 500——Reviewer D1）| 修复：V8/schema-h2 补列+删 hack
+- [BUG-017] T19 收口测试未交付（RBAC 矩阵/V8 重放/403——Dev 限额中断遗留，Reviewer D2）| 修复：CommercializationRbacSwitchContractTest 补齐
+
+### 计费口径（B1~B6 + 勘误 v1.1）
+月末快照定价/trial 不出账/转正赠送当月/首月按天折算(386.71 勘误)/千 token ceil/HALF_UP 2 位

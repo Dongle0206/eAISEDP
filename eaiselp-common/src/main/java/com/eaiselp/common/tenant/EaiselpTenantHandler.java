@@ -17,7 +17,12 @@ public class EaiselpTenantHandler implements TenantLineHandler {
         "t_model_routing",
         // M3-2 新增：审计日志按 tenant_id 显式记录（AuditService 从 LoginUser 取 tenant_id 写入），
         // 不走拦截器自动注入（append-only 表，明细由 AuditService 显式控制更清晰）
-        "t_governance_log"
+        "t_governance_log",
+        // V8 新增（case-20260823-商用化 T2/R6）：t_plan 为平台级商品资产（套餐目录，tenant_id 恒 0
+        // 仅占位，V8__commercialization.sql 头注释契约 + t_permission 先例）——平台级行 tenant_id=0
+        // 若被拦截器注入 tenant_id 条件将查不到（P1 空列表/套餐应用 40400），必须免租户过滤。
+        // t_invoice / t_incident 为租户级业务表，不进本清单（拦截器自动隔离）。
+        "t_plan"
     };
 
     @Override

@@ -86,5 +86,12 @@ public interface TenantSubscriptionService {
         private boolean expired;
         /** edition 是否为 trial */
         private boolean trial;
+        // ---- case-20260823-商用化 T4 追加（U1/U2 向前兼容扩展，契约 §2：既有六字段零变化） ----
+        /** 绑定套餐编码（t_tenant.plan_code；未绑定 null——trial/裸通道） */
+        private String planCode;
+        /** 绑定套餐名（t_plan.name 快照；行缺失 null） */
+        private String planName;
+        /** 绑定套餐 SLA 档（bronze/silver/gold；文案前端集中 D-17） */
+        private String slaLevel;
     }
 }
