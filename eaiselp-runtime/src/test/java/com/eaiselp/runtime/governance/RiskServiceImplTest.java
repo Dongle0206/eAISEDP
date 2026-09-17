@@ -554,4 +554,124 @@ class RiskServiceImplTest {
         assertTrue(vo.getHighRisks().get(0).getOverdue(), "复评逾期标识透传（AC-F1.14）");
         assertFalse(vo.getHighRisks().get(1).getOverdue());
     }
+
+    // ==================== case-20260824-技术债清偿：T1 审计快照 / T2 CAS / T4 长度 / T7 update_by ====================
+
+    @Test
+    void T1_编辑审计含old到new快照_P_I_category_owner() {
+        // 库中 P2I3/security/owner=旧责任人 → 编辑为 P5I4/technical/owner=新责任人
+        Risk before = stored(3201L, "open", 2, 3);
+        before.setCategory("security");
+        before.setOwner("旧责任人");
+        when(baseMapper.selectById(3201L)).thenReturn(before, before);
+        stubUpdateOk();
+
+        Risk patch = risk("数据泄露", "5", "4");
+        patch.setCategory("technical");
+        patch.setOwner("新责任人");
+        service.edit(3201L, patch);
+
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(auditService).log(eq("risk_update"), eq("risk"), eq("3201"), detail.capture());
+        String json = detail.getValue();
+        // 前值（oldXxx）
+        assertTrue(json.contains("\"oldCategory\":\"security\""), "前值 category 留痕: " + json);
+        assertTrue(json.contains("\"oldOwner\":\"旧责任人\""), "前值 owner 留痕: " + json);
+        assertTrue(json.contains("\"oldProbability\":2"), "前值 P 留痕: " + json);
+        assertTrue(json.contains("\"oldImpact\":3"), "前值 I 留痕: " + json);
+        // 后值（writeDetail 新值）
+        assertTrue(json.contains("\"category\":\"technical\""), "新值 category: " + json);
+        assertTrue(json.contains("\"owner\":\"新责任人\""), "新值 owner: " + json);
+        assertTrue(json.contains("\"probability\":5"), "新值 P: " + json);
+        assertTrue(json.contains("\"impact\":4"), "新值 I: " + json);
+    }
+
+    @Test
+    void T2_并发互覆_两次transit同from_第二次行数0抛400() {
+        // 场景：两个并发请求都读到 open→mitigating；第一个 UPDATE 成功改走 status，
+        // 第二个 UPDATE（.eq(status, from)）命中 0 行 → 400，不允许盲写覆盖
+        when(baseMapper.selectById(3210L)).thenReturn(stored(3210L, "open", 4, 5));
+        when(baseMapper.update(any(), any())).thenReturn(1, 0); // 第二次流转行数 0
+
+        service.transit(3210L, "mitigating", null); // 第一笔成功
+        BizException ex = assertThrows(BizException.class,
+                () -> service.transit(3210L, "mitigating", null), "CAS 行数 0 → 400 状态已变更");
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("已变更"), "并发冲突文案，实际: " + ex.getMessage());
+        // CAS 失败不写审计（未落库不产生审计噪音）
+        verify(auditService, times(1)).log(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void T2_transit更新SQL携带status条件_CAS防互覆() {
+        when(baseMapper.selectById(3211L)).thenReturn(stored(3211L, "open", 4, 5), stored(3211L, "mitigating", 4, 5));
+        stubUpdateOk();
+
+        service.transit(3211L, "mitigating", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaUpdateWrapper<Risk>> cap = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        String sql = cap.getValue().getSqlSegment();
+        assertTrue(sql.contains("status"), "UPDATE 追加 .eq(status, from) CAS 条件: " + sql);
+    }
+
+    @Test
+    void T4_owner超64_400指名() {
+        Risk r = risk("R", "4", "5");
+        r.setOwner("责".repeat(65));
+        BizException ex = assertThrows(BizException.class, () -> service.create(r));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("owner"), "指名字段，实际: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("64"));
+    }
+
+    @Test
+    void T4_resolutionNote超500_400指名() {
+        when(baseMapper.selectById(3212L)).thenReturn(stored(3212L, "mitigating", 4, 5));
+        stubUpdateOk();
+
+        BizException ex = assertThrows(BizException.class,
+                () -> service.transit(3212L, "closed", "处".repeat(501)));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("resolutionNote"), "指名字段，实际: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("500"));
+        verify(baseMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void T7_edit与transit落库_update_by非空无登录时system() {
+        // 无登录上下文（Mockito 单测线程）→ update_by 兜底 "system"（T7）
+        when(baseMapper.selectById(3220L)).thenReturn(stored(3220L, "open", 4, 5), stored(3220L, "mitigating", 4, 5));
+        stubUpdateOk();
+
+        service.transit(3220L, "mitigating", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<LambdaUpdateWrapper<Risk>> cap = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        Map<String, Object> params = setParams(cap.getValue());
+        assertTrue(params.containsValue("system"),
+                "update_by 显式落库且无登录兜底 system（T7），params: " + params);
+    }
+
+    @Test
+    void T7_loginIn下update_by取当前用户名() {
+        com.eaiselp.common.security.LoginUser.set(com.eaiselp.common.security.JwtClaims.builder()
+                .userId(9L).username("alice").tenantId(1L).build());
+        try {
+            when(baseMapper.selectById(3221L)).thenReturn(stored(3221L, "open", 4, 5), stored(3221L, "mitigating", 4, 5));
+            stubUpdateOk();
+
+            service.transit(3221L, "mitigating", null);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<LambdaUpdateWrapper<Risk>> cap = ArgumentCaptor.forClass(LambdaUpdateWrapper.class);
+            verify(baseMapper).update(any(), cap.capture());
+            assertTrue(setParams(cap.getValue()).containsValue("alice"), "登录态 update_by=当前用户名");
+        } finally {
+            com.eaiselp.common.security.LoginUser.clear();
+        }
+    }
 }

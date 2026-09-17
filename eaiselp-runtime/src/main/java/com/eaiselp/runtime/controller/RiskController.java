@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 风险登记册 REST API（case-20260821 T2/T10/T12，路径前缀 /api/v1/risks，契约=api-contracts §1）。
@@ -189,6 +190,11 @@ public class RiskController {
      * <p>空列表返回 {@code "[]"}（parseRelatedObjects 兼容还原为空列表）——PUT 全量编辑下
      * 空数组必须可落库清空关联（null 保留"不更新"语义），同 StandardController.toJson
      * 空列表语义修正先例。</p>
+     *
+     * <p><b>ObjectMapper 序列化</b>（case-20260824 T3，L3-S4）：原 StringBuilder 手工拼接只
+     * 转义 {@code \ "} 两字符，type/id 含控制字符（如 \u0000-\u001F）会产出非法 JSON 落库，
+     * 详情解析恒走容忍降级空列表（静默丢关联）。改静态 ObjectMapper（StandardServiceImpl
+     * 静态 OM 先例）后全字符集正确转义，round-trip 无损。</p>
      */
     static String toJsonRelated(List<RelatedObjectItem> items) {
         if (items == null) {
@@ -197,17 +203,23 @@ public class RiskController {
         if (items.isEmpty()) {
             return "[]";
         }
-        StringBuilder sb = new StringBuilder("[");
+        List<Map<String, String>> normalized = new java.util.ArrayList<>(items.size());
         for (RelatedObjectItem item : items) {
-            if (sb.length() > 1) {
-                sb.append(',');
-            }
-            String type = item.getType() == null ? "" : item.getType()
-                    .replace("\\", "\\\\").replace("\"", "\\\"");
-            String id = item.getId() == null ? "" : item.getId()
-                    .replace("\\", "\\\\").replace("\"", "\\\"");
-            sb.append("{\"type\":\"").append(type).append("\",\"id\":\"").append(id).append("\"}");
+            // null → "" 保持既有落库语义（历史行为兼容：空串而非 JSON null）
+            Map<String, String> m = new java.util.LinkedHashMap<>();
+            m.put("type", item.getType() == null ? "" : item.getType());
+            m.put("id", item.getId() == null ? "" : item.getId());
+            normalized.add(m);
         }
-        return sb.append(']').toString();
+        try {
+            return OM.writeValueAsString(normalized);
+        } catch (Exception e) {
+            // LinkedHashMap<String,String> 序列化实际不可失败——防御兜底与 Service 侧同形态
+            throw new IllegalArgumentException("relatedObjects 序列化失败", e);
+        }
     }
+
+    /** 静态共享 ObjectMapper（StandardServiceImpl 静态 OM 先例；无自定义模块注册需求）。 */
+    private static final com.fasterxml.jackson.databind.ObjectMapper OM =
+            new com.fasterxml.jackson.databind.ObjectMapper();
 }

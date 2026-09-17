@@ -75,7 +75,8 @@ class TenantControllerTest {
 
     @AfterEach
     void clearThreadLocal() {
-        LoginUser.set(null);
+        // clear() 同时清 LoginUser 与 TenantContext 双 ThreadLocal（case-20260824 T13）
+        LoginUser.clear();
     }
 
     private void loginAs(Long tenantId, String... roles) {
@@ -138,7 +139,8 @@ class TenantControllerTest {
 
     @Test
     void U1_未登录_40101() {
-        LoginUser.set(null);
+        // clear() 模拟未登录（set(null) 不清 TenantContext，会残留前值——case-20260824 T13）
+        LoginUser.clear();
         var r = controller.getSubscription();
         assertEquals(ResultCode.UNAUTHORIZED, r.getCode());
     }

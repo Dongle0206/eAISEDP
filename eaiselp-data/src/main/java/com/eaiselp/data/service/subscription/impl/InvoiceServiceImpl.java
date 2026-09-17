@@ -28,6 +28,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -235,7 +236,15 @@ public class InvoiceServiceImpl implements InvoiceService {
 
     // ==================== I4：状态流转（AC-F2.8） ====================
 
+    /**
+     * 资金状态流转（case-20260824-技术债清偿 T11：审计改<b>同步写</b>）。
+     *
+     * <p><b>强一致语义</b>：流转 UPDATE 与 bill_transit 审计在同一事务——审计写失败异常上抛，
+     * 流转一并回滚，杜绝"资金已变无审计"（原异步审计 + try-catch 吞异常只 WARN，
+     * 审计丢失后流转照常提交，违反资金审计完整性）。非资金类审计不受影响（仍走异步 {@code log}）。</p>
+     */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public InvoiceVo transit(Long id, String target) {
         if (target == null || target.isBlank()
                 || !(STATUS_ISSUED.equals(target) || STATUS_PAID.equals(target))) {
@@ -260,17 +269,22 @@ public class InvoiceServiceImpl implements InvoiceService {
             throw new BizException(400, "账单状态已变化（并发流转冲突），请刷新重试: " + id);
         }
         String operator = currentUsername();
+        // 同步审计（T11）：logSync 在本事务内 INSERT，失败上抛 → 上面 UPDATE 一并回滚。
+        // detail 序列化失败同样视为审计失败（上抛回滚，不吞）。
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("from", current);
+        detail.put("to", target);
+        detail.put("operator", operator);
+        detail.put("time", now.format(FORMATTER));
+        detail.put("period", exist.getPeriod());
+        detail.put("tenantId", exist.getTenantId());
         try {
-            Map<String, Object> detail = new LinkedHashMap<>();
-            detail.put("from", current);
-            detail.put("to", target);
-            detail.put("operator", operator);
-            detail.put("time", now.format(FORMATTER));
-            detail.put("period", exist.getPeriod());
-            detail.put("tenantId", exist.getTenantId());
-            auditService.log("bill_transit", "bill", String.valueOf(id), OM.writeValueAsString(detail));
+            auditService.logSync("bill_transit", "bill", String.valueOf(id),
+                    OM.writeValueAsString(detail));
+        } catch (BizException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("[Billing] 流转审计序列化失败（不阻塞业务）: {}", e.getMessage());
+            throw new IllegalStateException("bill_transit 审计写入失败（流转回滚）: " + id, e);
         }
         return toVo(loadOr404(id));
     }

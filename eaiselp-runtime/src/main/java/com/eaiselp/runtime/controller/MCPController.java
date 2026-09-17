@@ -82,6 +82,11 @@ public class MCPController {
     /**
      * 调用 MCP 工具。
      *
+     * <p><b>参数单值上限</b>（case-20260824 T9，MCP-S1）：{@code params} 任一单值序列化后
+     * 超过 10KB（10240 字节，UTF-8）→ 返回 JSON-RPC {@code -32602} 结构化错误
+     * （invalid params，与 Mock/HTTP 适配器错误码约定一致），不外发调用——防超大参数
+     * 打爆下游 MCP Server / LLM 上下文。</p>
+     *
      * @param req 工具名 + 参数（{@link InvokeRequest#name} 必填，{@link InvokeRequest#params} 可空）
      * @return 工具返回结果（结构由具体工具决定）；MCP 未配置或调用失败时返回降级态。
      */
@@ -93,6 +98,19 @@ public class MCPController {
     public R<Map<String, Object>> invoke(@RequestBody InvokeRequest req) {
         if (req == null || req.getName() == null || req.getName().isBlank()) {
             return R.fail(400, "工具名 name 不能为空");
+        }
+        // T9：单值 10KB 上限前置校验（fail-fast，超限不消耗适配器/外部调用）
+        String oversized = findOversizedParam(req.getParams());
+        if (oversized != null) {
+            log.warn("[MCP] invoke 参数单值超 10KB 上限: tool={}, param={}", req.getName(), oversized);
+            Map<String, Object> err = new java.util.LinkedHashMap<>();
+            err.put("code", -32602);
+            err.put("message", "参数 " + oversized + " 单值超过 10KB 上限（invalid params）");
+            Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("success", false);
+            body.put("message", err.get("message"));
+            body.put("error", err);
+            return R.ok(body);
         }
         MCPAdapter mcp = adapterFactory.getMCPAdapter();
         if (mcp == null || !mcp.isAvailable()) {
@@ -125,6 +143,43 @@ public class MCPController {
         m.put("message", message);
         m.put("tools", fallback);
         return m;
+    }
+
+    /** 参数单值大小上限（case-20260824 T9）：10KB（UTF-8 字节）。 */
+    static final int PARAM_VALUE_MAX_BYTES = 10 * 1024;
+
+    /**
+     * 找出首个超限参数（T9）：String 值按本体 UTF-8 字节数，非 String 值按 JSON 序列化字节数；
+     * 全部合规返回 null（null/空 params 恒合规）。序列化失败的复杂值视为超限（保守拒绝，
+     * 不外发无法度量大小的参数）。
+     */
+    static String findOversizedParam(Map<String, Object> params) {
+        if (params == null || params.isEmpty()) {
+            return null;
+        }
+        for (Map.Entry<String, Object> e : params.entrySet()) {
+            Object v = e.getValue();
+            if (v == null) {
+                continue;
+            }
+            String repr = v instanceof String s ? s : jsonRepr(v);
+            if (repr == null) {
+                return e.getKey();
+            }
+            if (repr.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > PARAM_VALUE_MAX_BYTES) {
+                return e.getKey();
+            }
+        }
+        return null;
+    }
+
+    /** JSON 序列化文本（失败返回 null——调用方按超限处理）。 */
+    private static String jsonRepr(Object v) {
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(v);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

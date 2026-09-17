@@ -12,6 +12,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * AuditServiceImpl 单测（审计合规敏感模块）。
@@ -29,14 +31,15 @@ import static org.junit.jupiter.api.Assertions.*;
 class AuditServiceImplTest {
 
     @Mock AuditLogger auditLogger;
+    @Mock com.eaiselp.data.mapper.GovernanceLogMapper governanceLogMapper;
 
     @InjectMocks
     AuditServiceImpl auditService;
 
     @AfterEach
     void clearThreadLocal() {
-        // 清理 LoginUser ThreadLocal，防止测试间污染
-        LoginUser.set(null);
+        // 清理 LoginUser 双 ThreadLocal（case-20260824 T13：set(null) 不清 TenantContext，须 clear()）
+        LoginUser.clear();
     }
 
     @Test
@@ -69,8 +72,8 @@ class AuditServiceImplTest {
 
     @Test
     void log_未登录_tenantId兜底为0() {
-        // LoginUser 未注入（如登录接口是白名单，无 token）
-        LoginUser.set(null);
+        // LoginUser 未注入（如登录接口是白名单，无 token）——clear() 同时清 LoginUser 与 TenantContext
+        LoginUser.clear();
 
         auditService.log("login_failure", "user", null,
                 "{\"username\":\"hacker\"}", "failure", "用户名或密码错误");
@@ -128,5 +131,35 @@ class AuditServiceImplTest {
 
         // 不应抛异常——审计失败不能影响业务主流程
         assertDoesNotThrow(() -> auditService.log("case_create", "case", "c1", null, null, null));
+    }
+
+    // ==================== case-20260824-技术债清偿 T11：同步通道 logSync ====================
+
+    @Test
+    void logSync_调用方线程直接INSERT_不经过异步writer() {
+        JwtClaims claims = JwtClaims.builder().userId(2L).username("op").tenantId(1L).build();
+        LoginUser.set(claims);
+
+        auditService.logSync("bill_transit", "bill", "77", "{\"from\":\"draft\"}");
+
+        // 同步通道：governanceLogMapper.insert（调用方线程），不触发 AuditLogger @Async
+        ArgumentCaptor<GovernanceLog> captor = ArgumentCaptor.forClass(GovernanceLog.class);
+        verify(governanceLogMapper).insert(captor.capture());
+        assertEquals("bill_transit", captor.getValue().getAction());
+        assertEquals("bill", captor.getValue().getResourceType());
+        assertEquals("77", captor.getValue().getResourceId());
+        assertEquals(1L, captor.getValue().getTenantId());
+        assertEquals("op", captor.getValue().getUsername());
+        org.mockito.Mockito.verifyNoInteractions(auditLogger);
+    }
+
+    @Test
+    void logSync_写入失败_异常上抛由调用方回滚() {
+        // T11 契约：同步通道失败必须上抛（与异步通道"吞异常只告警"刻意相反）
+        org.mockito.Mockito.when(governanceLogMapper.insert(org.mockito.ArgumentMatchers.any(GovernanceLog.class)))
+                .thenThrow(new RuntimeException("audit db down"));
+
+        assertThrows(RuntimeException.class,
+                () -> auditService.logSync("bill_transit", "bill", "77", null));
     }
 }

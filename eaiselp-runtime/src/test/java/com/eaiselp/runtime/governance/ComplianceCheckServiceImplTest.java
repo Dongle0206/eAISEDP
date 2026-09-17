@@ -291,4 +291,55 @@ class ComplianceCheckServiceImplTest {
         verify(baseMapper).selectPage(any(), w.capture());
         assertTrue(w.getValue().getSqlSegment().toLowerCase().contains("id desc"), "默认 id DESC（PRD 未锁排序）");
     }
+
+    // ==================== case-20260824-技术债清偿：T4 长度前置校验 / T7 update_by ====================
+
+    @Test
+    void T4_四字段超长_均400指名() {
+        // frameworkName(128, custom 场景) / clauseRef(128) / evidenceNote(1000) / owner(64)
+        String[] fields = {"frameworkName", "clauseRef", "evidenceNote", "owner"};
+        for (String field : fields) {
+            ComplianceCheck c = check("custom", "自研框架", "pass");
+            switch (field) {
+                case "frameworkName" -> c.setFrameworkName("框".repeat(129));
+                case "clauseRef" -> c.setClauseRef("A".repeat(129));
+                case "evidenceNote" -> c.setEvidenceNote("证".repeat(1001));
+                default -> c.setOwner("责".repeat(65));
+            }
+            BizException ex = assertThrows(BizException.class, () -> service.create(c));
+            assertEquals(400, ex.getCode(), field);
+            assertTrue(ex.getMessage().contains(field), field + " 指名，实际: " + ex.getMessage());
+        }
+    }
+
+    @Test
+    void T4_边界值恰好等宽_不误拒() {
+        ComplianceCheck c = check("custom", "自".repeat(128), "pass");
+        c.setClauseRef("A".repeat(128));
+        c.setEvidenceNote("证".repeat(1000));
+        c.setOwner("责".repeat(64));
+        when(baseMapper.insert(any(ComplianceCheck.class))).thenAnswer(inv -> {
+            ComplianceCheck x = inv.getArgument(0);
+            x.setId(4200L);
+            return 1;
+        });
+
+        assertEquals(4200L, service.create(c).getId(), "恰等列宽合法（> 才拒）");
+    }
+
+    @Test
+    void T7_edit落库_update_by无登录兜底system() {
+        when(baseMapper.selectById(4201L)).thenReturn(stored(4201L, "pass"), stored(4201L, "pass"));
+        when(baseMapper.update(any(), any())).thenReturn(1);
+
+        service.edit(4201L, check("iso27001", null, "fail"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<ComplianceCheck>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        assertTrue(cap.getValue().getParamNameValuePairs().containsValue("system"),
+                "edit wrapper 显式 set update_by（T7），无登录兜底 system，params: "
+                        + cap.getValue().getParamNameValuePairs());
+    }
 }

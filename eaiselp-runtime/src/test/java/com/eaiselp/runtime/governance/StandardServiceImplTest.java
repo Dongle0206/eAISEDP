@@ -379,6 +379,8 @@ class StandardServiceImplTest {
 
     private void stubUpdateOk() {
         when(baseMapper.updateById(any(Standard.class))).thenReturn(1);
+        // case-20260824 T6：transit 改 LambdaUpdateWrapper CAS 落库（原 updateById）
+        when(baseMapper.update(any(), any())).thenReturn(1);
     }
 
     @Test
@@ -389,12 +391,15 @@ class StandardServiceImplTest {
 
         StandardVo vo = service.transit(1932L, "published", null);
 
-        ArgumentCaptor<Standard> captor = ArgumentCaptor.forClass(Standard.class);
-        verify(baseMapper, times(1)).updateById(captor.capture());
-        assertEquals("published", captor.getValue().getStatus());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Standard>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper, times(1)).update(any(), cap.capture());
+        assertTrue(cap.getValue().getParamNameValuePairs().containsValue("published"),
+                "wrapper set status=published，params: " + cap.getValue().getParamNameValuePairs());
         verify(auditService).log(eq("standard_transit"), eq("standard"), eq("1932"), anyString());
         verify(auditService, never()).log(eq("standard_auto_deprecate"), anyString(), anyString(), anyString());
-        assertEquals("draft", vo.getStatus(), "Vo 为 stub 回显值（更新落库由 updateById 断言承载）");
+        assertEquals("draft", vo.getStatus(), "Vo 为 stub 回显值（更新落库由 wrapper 断言承载）");
     }
 
     @Test
@@ -405,6 +410,7 @@ class StandardServiceImplTest {
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("deprecateReason"), "废弃必填原因，实际: " + ex.getMessage());
         verify(baseMapper, never()).updateById(any(Standard.class));
+        verify(baseMapper, never()).update(any(), any());
     }
 
     @Test
@@ -414,10 +420,13 @@ class StandardServiceImplTest {
 
         service.transit(1932L, "deprecated", "内容过时");
 
-        ArgumentCaptor<Standard> captor = ArgumentCaptor.forClass(Standard.class);
-        verify(baseMapper).updateById(captor.capture());
-        assertEquals("deprecated", captor.getValue().getStatus());
-        assertEquals("内容过时", captor.getValue().getDeprecateReason(), "废弃原因落列（V6 纠偏，详情列直读）");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Standard>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        java.util.Map<String, Object> params = cap.getValue().getParamNameValuePairs();
+        assertTrue(params.containsValue("deprecated"), "status 落 deprecated，params: " + params);
+        assertTrue(params.containsValue("内容过时"), "废弃原因落列（V6 纠偏，详情列直读），params: " + params);
         ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
         verify(auditService).log(eq("standard_transit"), eq("standard"), eq("1932"), detail.capture());
         assertTrue(detail.getValue().contains("内容过时"));
@@ -432,10 +441,13 @@ class StandardServiceImplTest {
 
         service.transit(1932L, "deprecated", "不再适用");
 
-        ArgumentCaptor<Standard> captor = ArgumentCaptor.forClass(Standard.class);
-        verify(baseMapper).updateById(captor.capture());
-        assertEquals("deprecated", captor.getValue().getStatus());
-        assertEquals("不再适用", captor.getValue().getDeprecateReason());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Standard>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        java.util.Map<String, Object> params = cap.getValue().getParamNameValuePairs();
+        assertTrue(params.containsValue("deprecated"), "status 落 deprecated，params: " + params);
+        assertTrue(params.containsValue("不再适用"), "draft 作废原因落列，params: " + params);
     }
 
     @Test
@@ -446,6 +458,7 @@ class StandardServiceImplTest {
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("终态"), "deprecated 终态无出边，实际: " + ex.getMessage());
         verify(baseMapper, never()).updateById(any(Standard.class));
+        verify(baseMapper, never()).update(any(), any());
     }
 
     @Test
@@ -456,6 +469,7 @@ class StandardServiceImplTest {
         assertEquals(400, ex.getCode());
         assertTrue(ex.getMessage().contains("非法状态流转"), "published→draft 拒绝，实际: " + ex.getMessage());
         verify(baseMapper, never()).updateById(any(Standard.class));
+        verify(baseMapper, never()).update(any(), any());
     }
 
     @Test
@@ -473,6 +487,7 @@ class StandardServiceImplTest {
 
         assertNotNull(vo);
         verify(baseMapper, never()).updateById(any(Standard.class));
+        verify(baseMapper, never()).update(any(), any());
         verify(auditService, never()).log(anyString(), anyString(), anyString(), anyString());
     }
 
@@ -502,17 +517,21 @@ class StandardServiceImplTest {
         assertTrue(lockSql.contains("for update"), "发布取代走 FOR UPDATE 行级锁（D-7），实际: " + lockSql);
         assertTrue(lockSql.contains("status"), "锁定对象限定现行 published 版本，实际: " + lockSql);
 
-        // 事务内先取代旧版（deprecated + 原因含"被 {code} {新版本} 取代"）再发布新版
-        ArgumentCaptor<Standard> updates = ArgumentCaptor.forClass(Standard.class);
-        verify(baseMapper, times(2)).updateById(updates.capture());
-        List<Standard> patched = updates.getAllValues();
-        assertEquals(1900L, patched.get(0).getId(), "先取代旧 published（顺序钉死，SE §3.2.1）");
-        assertEquals("deprecated", patched.get(0).getStatus());
-        assertEquals("被 STD-0001 v2.0 取代", patched.get(0).getDeprecateReason(), "自动废弃原因含「被 {code} {新版本} 取代」");
-        assertEquals(1932L, patched.get(1).getId());
-        assertEquals("published", patched.get(1).getStatus(), "后发布新版");
-        long publishedCount = patched.stream().filter(p -> "published".equals(p.getStatus())).count();
-        assertEquals(1, publishedCount, "同编号至多一个 published（AC-F1.4）");
+        // 事务内先取代旧版（deprecated + 原因含"被 {code} {新版本} 取代"，updateById 路径）
+        // 再发布新版（wrapper CAS 路径——case-20260824 T6）
+        ArgumentCaptor<Standard> supersede = ArgumentCaptor.forClass(Standard.class);
+        verify(baseMapper, times(1)).updateById(supersede.capture());
+        assertEquals(1900L, supersede.getValue().getId(), "先取代旧 published（顺序钉死，SE §3.2.1）");
+        assertEquals("deprecated", supersede.getValue().getStatus());
+        assertEquals("被 STD-0001 v2.0 取代", supersede.getValue().getDeprecateReason(), "自动废弃原因含「被 {code} {新版本} 取代」");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Standard>> publishCap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper, times(1)).update(any(), publishCap.capture());
+        String publishSql = publishCap.getValue().getSqlSegment();
+        java.util.Map<String, Object> publishParams = publishCap.getValue().getParamNameValuePairs();
+        assertTrue(publishParams.containsValue("published"), "后发布新版（wrapper set published），params: " + publishParams);
+        assertTrue(publishSql.contains("status"), "发布 UPDATE 携带 .eq(status, from) CAS 条件（T6）: " + publishSql);
 
         // 双审计：standard_transit（发布）+ standard_auto_deprecate（自动废弃，resource_id=旧版）
         ArgumentCaptor<String> autoDetail = ArgumentCaptor.forClass(String.class);
@@ -531,9 +550,50 @@ class StandardServiceImplTest {
 
         service.transit(1932L, "published", null);
 
-        verify(baseMapper, times(1)).updateById(any(Standard.class));
+        // 首发：transit 走 wrapper（T6），auto-deprecate 未触发（updateById 零调用）
+        verify(baseMapper, times(1)).update(any(), any());
+        verify(baseMapper, never()).updateById(any(Standard.class));
         verify(auditService, never()).log(eq("standard_auto_deprecate"), anyString(), anyString(), anyString());
         verify(auditService).log(eq("standard_transit"), eq("standard"), eq("1932"), anyString());
+    }
+
+    // ==================== case-20260824-技术债清偿：T6 transit CAS / T7 update_by ====================
+
+    @Test
+    void T6_并发互覆_两次transit同from_第二次行数0抛400() {
+        // 两并发都读到 draft→published；第一笔 FOR UPDATE 取代+发布后，第二笔
+        // .eq(status,draft) 命中 0 行 → 400（不允许覆盖已发布结果）
+        Standard old = stored("STD-0001", "v1.0", "published");
+        old.setId(1900L);
+        when(baseMapper.selectOne(any())).thenReturn(old);
+        when(baseMapper.selectById(1933L)).thenReturn(stored("STD-0001", "v2.0", "draft"));
+        when(baseMapper.updateById(any(Standard.class))).thenReturn(1);
+        when(baseMapper.update(any(), any())).thenReturn(1, 0); // 第二次流转（发布 UPDATE）行数 0
+
+        service.transit(1933L, "published", null); // 第一笔发布成功
+        BizException ex = assertThrows(BizException.class,
+                () -> service.transit(1933L, "published", null), "CAS 行数 0 → 400 状态已变更");
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("已变更"), "并发冲突文案，实际: " + ex.getMessage());
+        // 第二笔失败：不写 transit 审计（auto_deprecate 仍只第一笔的 1 次）
+        verify(auditService, times(1)).log(eq("standard_transit"), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void T7_transit落库_update_by无登录兜底system() {
+        when(baseMapper.selectById(1934L)).thenReturn(stored("STD-0002", "v1.0", "published"));
+        stubUpdateOk();
+
+        service.transit(1934L, "deprecated", "内容过时");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<Standard>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        assertTrue(cap.getValue().getParamNameValuePairs().containsValue("system"),
+                "transit wrapper 显式 set update_by（T7），无登录兜底 system，params: "
+                        + cap.getValue().getParamNameValuePairs());
     }
 
     // ==================== 锚点 16：D-9 gateName 反查 + S3 被引用解析（批B T13，AC-F1.7） ====================

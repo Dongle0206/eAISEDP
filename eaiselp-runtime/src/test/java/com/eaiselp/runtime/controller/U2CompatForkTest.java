@@ -75,7 +75,8 @@ class U2CompatForkTest {
 
     @AfterEach
     void clearThreadLocal() {
-        LoginUser.set(null);
+        // clear() 同时清 LoginUser 与 TenantContext 双 ThreadLocal（case-20260824 T13）
+        LoginUser.clear();
     }
 
     private void loginAsPlatformAdmin() {

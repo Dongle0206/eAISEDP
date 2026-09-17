@@ -59,12 +59,35 @@ public interface AuditService {
     /**
      * 记录审计日志（全字段）。
      *
-     * @param action       操作动作
-     * @param resourceType 资源类型
-     * @param resourceId   资源标识
+     * @param action       操作动作（如 login_success / case_create）
+     * @param resourceType 资源类型（如 case / user）
+     * @param resourceId   资源标识（如 caseId / userId，可为 null）
      * @param detail       详情 JSON 文本（可为 null）
      * @param result       结果：success / failure
      * @param errorMsg     失败时的错误信息（result=failure 时填，可为 null）
      */
     void log(String action, String resourceType, String resourceId, String detail, String result, String errorMsg);
+
+    /**
+     * 记录审计日志（成功，带 detail）——<b>同步写</b>（case-20260824-技术债清偿 T11）。
+     *
+     * <p>与 {@link #log} 的区别：在<b>调用方线程</b>直接 INSERT（加入调用方事务），写入失败
+     * <b>异常上抛</b>触发调用方回滚——用于"资金已变必须有审计"的强一致场景
+     * （bill_transit：审计失败=流转失败，杜绝资金状态变更无审计留痕）。非资金类审计继续用
+     * 异步 {@link #log}（可用性优先，reliability-governance 兜底）。</p>
+     *
+     * @param action       操作动作（如 bill_transit）
+     * @param resourceType 资源类型（如 bill）
+     * @param resourceId   资源标识
+     * @param detail       详情 JSON 文本（可为 null）
+     */
+    default void logSync(String action, String resourceType, String resourceId, String detail) {
+        logSync(action, resourceType, resourceId, detail, "success", null);
+    }
+
+    /**
+     * 记录审计日志（全字段）——<b>同步写</b>（T11：失败上抛，语义见 {@link #logSync(String, String, String, String)}）。
+     */
+    void logSync(String action, String resourceType, String resourceId,
+                 String detail, String result, String errorMsg);
 }

@@ -108,3 +108,15 @@
 
 ### 计费口径（B1~B6 + 勘误 v1.1）
 月末快照定价/trial 不出账/转正赠送当月/首月按天折算(386.71 勘误)/千 token ceil/HALF_UP 2 位
+
+
+## v0.4.1（2026-09-16 技术债清偿，case-20260824 fast 档）
+
+### 改进/技术债清偿（T1~T13，799 测试绿 +49）
+- [IMP-019] 审计补强：risk/bizcase edit 审计补 old→new（T1）；bill_transit 资金审计同步写（审计失败=流转回滚，T11——Security S1 根除）；wrapper 增 update_by（T7）
+- [IMP-020] 并发安全：risk/bizcase/standard 三处 transit CAS（.eq(status,from)+行数 0 重读 400，T2/T6——Reviewer D3 根除）
+- [IMP-021] 安全根除：X-Tenant-Id 头解析删除（租户唯一派生=JWT，T12——Security S2 根除，"新增白名单即越权面"消除）；LoginUser 双 ThreadLocal 雷全树 clear()（T13）
+- [IMP-022] 输入与健壮性：六字段长度校验 400 指名（T4）；坏 JSON→400 非 50000（T5——平台级 S6 根除）；MCP 参数 10KB 上限/Mock 桶上限 10k/内部错误固定文案（T9/T10）
+- [IMP-023] 前端：risk-board 关联选择器上限 200+关键词过滤（T8）；toJsonRelated 改 ObjectMapper（T3）
+- 遗留：updateById 路径 update_by 半区（D4 遗留）；选择器服务端分页（前端专项）
+- 门禁：Reviewer 限额中断，编排者代验（T12/T11/T2 实证+799 复现，报告落盘）

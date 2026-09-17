@@ -103,6 +103,14 @@ public class MockMCPProvider implements MCPAdapter {
     public static final int CODE_INTERNAL = -32603;
     /** JSON-RPC server error 区间（-32000~-32099）：id 在本租户内不存在。 */
     public static final int CODE_NOT_FOUND = -32004;
+    /** JSON-RPC server error 区间：本租户实体桶容量上限（case-20260824 T10，MCP-S5 内存边界）。 */
+    public static final int CODE_CAPACITY = -32005;
+
+    /**
+     * 每租户每实体桶条数上限（case-20260824 T10）：纯内存 mock 无持久化，防演示/压测无限
+     * 写入撑爆堆——达到上限再 create 返回 {@link #CODE_CAPACITY} 结构化错误（不抛异常）。
+     */
+    static final int BUCKET_CAP = 10_000;
 
     /** 工具注册表（启动时预置 9 工具；registerTool 可追加，name 唯一）。 */
     private final Map<String, ToolInfo> tools = new ConcurrentHashMap<>();
@@ -198,9 +206,10 @@ public class MockMCPProvider implements MCPAdapter {
         try {
             return dispatch(name, params == null ? Map.of() : params);
         } catch (Exception e) {
-            // 兜底：处理器异常转结构化错误（AC-07 不抛 500）
+            // 兜底：处理器异常转结构化错误（AC-07 不抛 500）。固定文案不回显 e.getMessage()
+            // （case-20260824 T10，MCP-S4：异常明细可能含内部路径/堆栈信息，只留日志），
             log.error("[MCPAdapter-Mock] invokeTool 内部异常 name={}, err={}", name, e.getMessage(), e);
-            return error(CODE_INTERNAL, "mock 工具内部错误: " + e.getMessage());
+            return error(CODE_INTERNAL, "mock 工具内部错误（详情见服务端日志）");
         }
     }
 
@@ -223,6 +232,9 @@ public class MockMCPProvider implements MCPAdapter {
     }
 
     private Object jiraCreateIssue(TenantStore st, String summary, String description) {
+        if (bucketFull(st.jiraIssues)) {
+            return capacityError("Jira Issue");
+        }
         Map<String, Object> rec = new LinkedHashMap<>();
         rec.put("id", "JIRA-" + issueSeq.incrementAndGet());
         rec.put("summary", summary);
@@ -247,6 +259,9 @@ public class MockMCPProvider implements MCPAdapter {
     }
 
     private Object confluenceCreatePage(TenantStore st, String title, String content, String description) {
+        if (bucketFull(st.pages)) {
+            return capacityError("Confluence Page");
+        }
         Map<String, Object> rec = new LinkedHashMap<>();
         rec.put("id", "PAGE-" + pageSeq.incrementAndGet());
         rec.put("title", title);
@@ -279,6 +294,9 @@ public class MockMCPProvider implements MCPAdapter {
     }
 
     private Object gitlabCreateMr(TenantStore st, String title, String sourceBranch, String targetBranch, String description) {
+        if (bucketFull(st.mrs)) {
+            return capacityError("Merge Request");
+        }
         Map<String, Object> rec = new LinkedHashMap<>();
         rec.put("id", "MR-" + mrSeq.incrementAndGet());
         rec.put("title", title);
@@ -297,6 +315,9 @@ public class MockMCPProvider implements MCPAdapter {
     }
 
     private Object gitlabCreateIssue(TenantStore st, String title, String description) {
+        if (bucketFull(st.gitlabIssues)) {
+            return capacityError("GitLab Issue");
+        }
         Map<String, Object> rec = new LinkedHashMap<>();
         rec.put("id", "GL-" + gitlabIssueSeq.incrementAndGet());
         rec.put("title", title);
@@ -311,6 +332,19 @@ public class MockMCPProvider implements MCPAdapter {
     /** 取本租户数据桶（无上下文时落到 SYSTEM_TENANT=0 系统桶，不越租户）。 */
     private TenantStore store() {
         return tenants.computeIfAbsent(TenantContext.get(), k -> new TenantStore());
+    }
+
+    /** 桶容量校验（case-20260824 T10）：达上限返回 true（create 侧据此返回结构化错误）。 */
+    private static boolean bucketFull(List<Map<String, Object>> bucket) {
+        synchronized (bucket) {
+            return bucket.size() >= BUCKET_CAP;
+        }
+    }
+
+    /** 桶容量结构化错误（T10，AC-07 形态：{@code {__mock:true, error:{code:-32005,message}}}）。 */
+    private Map<String, Object> capacityError(String entity) {
+        return error(CODE_CAPACITY, "本租户 " + entity + " 桶已达 " + BUCKET_CAP
+                + " 条上限（mock 内存边界，应用重启清空后可继续）");
     }
 
     /** 按 id 在指定实体列表中查找记录（仅本租户桶内，跨租户自然 NOT_FOUND）。 */

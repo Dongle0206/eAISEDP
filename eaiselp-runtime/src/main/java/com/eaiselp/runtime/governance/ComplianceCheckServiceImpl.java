@@ -85,7 +85,9 @@ public class ComplianceCheckServiceImpl extends ServiceImpl<ComplianceCheckMappe
                     .set(ComplianceCheck::getEvidenceNote, patch.getEvidenceNote())
                     .set(ComplianceCheck::getCheckDate, patch.getCheckDate())
                     .set(ComplianceCheck::getRecheckDate, patch.getRecheckDate())
-                    .set(ComplianceCheck::getOwner, patch.getOwner()));
+                    .set(ComplianceCheck::getOwner, patch.getOwner())
+                    // update_by 显式携带当前用户（case-20260824 T7：wrapper 不触发填充，空则 system）
+                    .set(ComplianceCheck::getUpdateBy, operatorOrSystem()));
         } catch (DuplicateKeyException e) {
             throw new BizException(400, "检查项已存在: " + patch.getCheckName());
         }
@@ -200,6 +202,19 @@ public class ComplianceCheckServiceImpl extends ServiceImpl<ComplianceCheckMappe
             throw new BizException(400, "frameworkName 必须为空（framework=" + fw.dbValue()
                     + " 非 custom 时不得携带自定义框架名，防脏数据）");
         }
+        // 长度前置校验（case-20260824 T4：V7 列宽 128/128/1000/64，超长 400 指名防 DB 截断）
+        if (overLength(check.getFrameworkName(), 128, "frameworkName")) {
+            throw new BizException(400, "frameworkName 长度不能超过 128 字符");
+        }
+        if (overLength(check.getClauseRef(), 128, "clauseRef")) {
+            throw new BizException(400, "clauseRef 长度不能超过 128 字符");
+        }
+        if (overLength(check.getEvidenceNote(), 1000, "evidenceNote")) {
+            throw new BizException(400, "evidenceNote 长度不能超过 1000 字符");
+        }
+        if (overLength(check.getOwner(), 64, "owner")) {
+            throw new BizException(400, "owner 长度不能超过 64 字符");
+        }
         requireText(check.getResult(), "result");
         if (ComplianceResult.fromDbValue(check.getResult()) == null) {
             throw new BizException(400, "result 非法: " + check.getResult()
@@ -228,9 +243,23 @@ public class ComplianceCheckServiceImpl extends ServiceImpl<ComplianceCheckMappe
         }
     }
 
+    /** 长度前置校验（case-20260824 T4）：null 视为不超长（可空字段），非 null 超宽即 true。 */
+    private static boolean overLength(String value, int max, String field) {
+        return value != null && value.length() > max;
+    }
+
     private static String operatorName() {
         JwtClaims claims = LoginUser.get();
         return claims != null ? claims.getUsername() : null;
+    }
+
+    /**
+     * update_by 落库值（case-20260824 T7）：当前登录用户名；无登录上下文兜底 "system"
+     * （对齐 V4~V8 审计列语义，与 RiskServiceImpl 同款）。
+     */
+    static String operatorOrSystem() {
+        JwtClaims claims = LoginUser.get();
+        return claims != null && claims.getUsername() != null ? claims.getUsername() : "system";
     }
 
     private void audit(String action, Long id, Object detail) {

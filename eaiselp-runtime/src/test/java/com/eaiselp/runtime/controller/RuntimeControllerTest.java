@@ -83,8 +83,8 @@ class RuntimeControllerTest {
 
     @AfterEach
     void tearDown() {
-        TenantContext.clear();
-        LoginUser.set(null);
+        // clear() 同时清 LoginUser 与 TenantContext 双 ThreadLocal（case-20260824 T13）
+        LoginUser.clear();
     }
 
     /** TC1: POST derive 异步模式，立即返回 taskId（HTTP 202），createPending 被调用。 */

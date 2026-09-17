@@ -17,9 +17,11 @@ import com.eaiselp.data.service.subscription.impl.InvoiceServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.runtime.EaiselpRuntimeApplication;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.math.BigDecimal;
@@ -27,6 +29,9 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 
 /**
  * InvoiceService H2 集成单测（case-20260823-商用化 T7/T9/T10；SE §9.1 锚点 2~10；
@@ -51,6 +56,8 @@ class InvoiceServiceImplTest {
     @Autowired GovernanceLogMapper governanceLogMapper;
     @Autowired com.eaiselp.data.mapper.PlanMapper planMapper;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    /** T11：Spy 真实审计实现（其余用例不受影响），仅在回滚用例对 logSync 注入失败 */
+    @SpyBean AuditService auditService;
 
     /**
      * 测试基建补位（schema-h2 缺口，非 DBA 资产改动）：t_governance_log / t_quota 在
@@ -96,6 +103,8 @@ class InvoiceServiceImplTest {
         jdbcTemplate.update("DELETE FROM t_invoice WHERE tenant_id IN (9001, 9002, 9003, 9004)");
         jdbcTemplate.update("DELETE FROM t_derivation WHERE tenant_id IN (9001, 9002, 9003, 9004)");
         jdbcTemplate.update("DELETE FROM t_governance_log WHERE resource_id IN ('9001','9002','9003','9004')");
+        // T11：bill 系审计行（bill_transit 的 resource_id=账单雪花 id，不落 900x 清理口径）
+        jdbcTemplate.update("DELETE FROM t_governance_log WHERE action LIKE 'bill_%'");
         jdbcTemplate.update("DELETE FROM t_quota WHERE tenant_id IN (9001, 9002, 9003, 9004)");
         jdbcTemplate.update("DELETE FROM t_tenant WHERE id IN (9001, 9002, 9003, 9004)");
     }
@@ -531,5 +540,48 @@ class InvoiceServiceImplTest {
         BizException bad = assertThrows(BizException.class,
                 () -> invoiceService.generatePeriod("2026/08", null, "qa"));
         assertEquals(40000, bad.getCode(), "period 非 yyyy-MM → 40000");
+    }
+
+    // ==================== case-20260824-技术债清偿 T11：审计同步写 + 失败回滚 ====================
+
+    @Test
+    void T11_审计写入成功_bill_transit审计行落库() {
+        tenant(T, "pro", "pro", AUG_START.minusDays(90));
+        invoiceService.generatePeriod(AUG, null, "qa");
+        Long id = invoiceOf(T).getId();
+
+        invoiceService.transit(id, "issued");
+
+        // 同步审计行已落库（与流转同事务，先后脚可见——不再是"异步迟到"）
+        Long auditCount = governanceLogMapper.selectCount(new LambdaQueryWrapper<GovernanceLog>()
+                .eq(GovernanceLog::getAction, "bill_transit")
+                .eq(GovernanceLog::getResourceId, String.valueOf(id)));
+        assertEquals(1L, auditCount, "bill_transit 审计行与流转原子落库");
+        assertEquals("issued", invoiceOf(T).getStatus());
+    }
+
+    @Test
+    void T11_审计失败_流转一并回滚_杜绝资金已变无审计() {
+        tenant(T, "pro", "pro", AUG_START.minusDays(90));
+        invoiceService.generatePeriod(AUG, null, "qa");
+        Long id = invoiceOf(T).getId();
+        assertEquals("draft", invoiceOf(T).getStatus());
+
+        // 注入审计写入失败（logSync 同步通道在事务内 INSERT 抛错）
+        doThrow(new RuntimeException("audit db down"))
+                .when(auditService).logSync(eq("bill_transit"), eq("bill"),
+                        eq(String.valueOf(id)), anyString());
+
+        assertThrows(Exception.class, () -> invoiceService.transit(id, "issued"),
+                "审计失败必须让流转调用失败（上抛触发 @Transactional 回滚）");
+
+        // 回滚断言：资金状态未变（draft），issued_time 未写入，审计行不存在
+        Invoice after = invoiceOf(T);
+        assertEquals("draft", after.getStatus(), "审计失败 → 流转回滚，状态仍 draft（资金已变无审计被杜绝）");
+        assertNull(after.getIssuedTime(), "issued_time 回滚未写入");
+        Long auditCount = governanceLogMapper.selectCount(new LambdaQueryWrapper<GovernanceLog>()
+                .eq(GovernanceLog::getAction, "bill_transit")
+                .eq(GovernanceLog::getResourceId, String.valueOf(id)));
+        assertEquals(0L, auditCount, "失败的流转不留半截审计");
     }
 }

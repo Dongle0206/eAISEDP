@@ -92,7 +92,8 @@ public class RiskServiceImpl extends ServiceImpl<RiskMapper, Risk> implements Ri
         int riskValue = validateForWrite(patch);
         applyComputed(patch, riskValue);
         // LambdaUpdateWrapper 显式 set：可空字段（mitigation/reviewDate/relatedObjects 等）
-        // 置 null 必须落库（PUT 全量语义）；非 closed 状态 resolutionNote 强制置 NULL（V7 列契约）
+        // 置 null 必须落库（PUT 全量语义）；非 closed 状态 resolutionNote 强制置 NULL（V7 列契约）；
+        // update_by 显式携带当前用户（T7：wrapper 更新不触发 MetaObjectHandler 填充，空则 system）
         try {
             update(new LambdaUpdateWrapper<Risk>()
                     .eq(Risk::getId, id)
@@ -108,11 +109,18 @@ public class RiskServiceImpl extends ServiceImpl<RiskMapper, Risk> implements Ri
                     .set(Risk::getOwner, patch.getOwner())
                     .set(Risk::getRelatedObjects, patch.getRelatedObjects())
                     .set(Risk::getReviewDate, patch.getReviewDate())
-                    .set(Risk::getResolutionNote, null));
+                    .set(Risk::getResolutionNote, null)
+                    .set(Risk::getUpdateBy, operatorOrSystem()));
         } catch (DuplicateKeyException e) {
             throw new BizException(400, "风险已存在: " + patch.getRiskName());
         }
         Map<String, Object> detail = writeDetail(patch);
+        // 审计补 old→new 快照（case-20260824 T1，对齐 ComplianceCheckServiceImpl.edit 先例）：
+        // P/I/category/owner 前值留痕（新值已在 writeDetail——覆盖式唯一留痕，AC-AUDIT.1）
+        detail.put("oldCategory", exist.getCategory());
+        detail.put("oldProbability", exist.getProbability());
+        detail.put("oldImpact", exist.getImpact());
+        detail.put("oldOwner", exist.getOwner());
         detail.put("operator", operatorName());
         audit("risk_update", id, detail);
         return getById(id);
@@ -209,11 +217,22 @@ public class RiskServiceImpl extends ServiceImpl<RiskMapper, Risk> implements Ri
                 && (resolutionNote == null || resolutionNote.isBlank())) {
             throw new BizException(400, "resolutionNote 必填（关闭风险必须填写处置说明）");
         }
-        // 落库：status + resolutionNote（非 closed 目标强制置 NULL，V7 列契约）
-        update(new LambdaUpdateWrapper<Risk>()
+        // 长度前置校验（case-20260824 T4：V7 resolution_note VARCHAR(500)，超长 400 指名防 DB 截断 500）
+        if (resolutionNote != null && resolutionNote.trim().length() > 500) {
+            throw new BizException(400, "resolutionNote 长度不能超过 500 字符");
+        }
+        // 落库：status + resolutionNote（非 closed 目标强制置 NULL，V7 列契约）。
+        // CAS（case-20260824 T2）：UPDATE 追加 .eq(status, from)——并发互覆窗口根除，
+        // 行数 0 = 已被并发流转改走 → 400 让客户端刷新重试（不重试盲写）。
+        boolean updated = update(new LambdaUpdateWrapper<Risk>()
                 .eq(Risk::getId, id)
+                .eq(Risk::getStatus, from.dbValue())
                 .set(Risk::getStatus, to.dbValue())
-                .set(Risk::getResolutionNote, to == RiskStatus.CLOSED ? resolutionNote.trim() : null));
+                .set(Risk::getResolutionNote, to == RiskStatus.CLOSED ? resolutionNote.trim() : null)
+                .set(Risk::getUpdateBy, operatorOrSystem()));
+        if (!updated) {
+            throw new BizException(400, "风险状态已变更（并发流转冲突），请刷新重试: " + id);
+        }
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("riskName", exist.getRiskName());
         detail.put("from", from.dbValue());
@@ -331,6 +350,10 @@ public class RiskServiceImpl extends ServiceImpl<RiskMapper, Risk> implements Ri
                     + "（应为 " + RiskCategory.legalValues() + "）");
         }
         requireText(risk.getOwner(), "owner");
+        // 长度前置校验（case-20260824 T4：V7 owner VARCHAR(64)，超长 400 指名）
+        if (risk.getOwner().length() > 64) {
+            throw new BizException(400, "owner 长度不能超过 64 字符");
+        }
         validateRelatedObjects(risk.getRelatedObjects());
         // 先校验后计算（AC-F1.3：0/6/1.5/负数在计算前 400 指名）
         return RiskCalculator.riskValue(risk.getProbability(), risk.getImpact());
@@ -485,6 +508,7 @@ public class RiskServiceImpl extends ServiceImpl<RiskMapper, Risk> implements Ri
         detail.put("impact", risk.getImpact());
         detail.put("riskValue", risk.getRiskValue());
         detail.put("riskLevel", risk.getRiskLevel());
+        detail.put("owner", risk.getOwner());
         detail.put("relatedObjects", parseRelatedObjects(risk.getRelatedObjects()));
         return detail;
     }
@@ -499,6 +523,15 @@ public class RiskServiceImpl extends ServiceImpl<RiskMapper, Risk> implements Ri
     private static String operatorName() {
         JwtClaims claims = LoginUser.get();
         return claims != null ? claims.getUsername() : null;
+    }
+
+    /**
+     * update_by 落库值（case-20260824 T7）：当前登录用户名；无登录上下文（定时/系统路径）
+     * 兜底 "system"——对齐 V4~V8 审计列语义（update_by 非空可追溯）。
+     */
+    static String operatorOrSystem() {
+        JwtClaims claims = LoginUser.get();
+        return claims != null && claims.getUsername() != null ? claims.getUsername() : "system";
     }
 
     private void audit(String action, Long id, Object detail) {

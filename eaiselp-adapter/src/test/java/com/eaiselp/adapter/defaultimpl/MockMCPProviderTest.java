@@ -334,4 +334,56 @@ class MockMCPProviderTest {
         assertEquals("mock", provider.getProvider());
         assertTrue(provider.isAvailable());
     }
+
+    // ============================ case-20260824-技术债清偿 T10（MCP-S4/S5） ============================
+
+    @Test
+    @DisplayName("T10 内部错误: CODE_INTERNAL 固定文案，不回显异常 message（明细留日志）")
+    void T10_内部错误固定文案_不泄露异常明细() {
+        // 构造 dispatch 内真实异常：必填 summary 合法（missingRequired 在 try 外放行），
+        // 可选 description 读取时抛错（str() 在 dispatch 内 → try 块内）→ 兜底 -32603
+        Map<String, Object> evil = new java.util.HashMap<>() {
+            @Override
+            public Object get(Object key) {
+                if ("description".equals(key)) {
+                    throw new RuntimeException("内部路径泄露: /opt/app/secret.yml");
+                }
+                return super.get(key);
+            }
+        };
+        evil.put("summary", "ok");
+
+        Object result = assertDoesNotThrow(() -> provider.invokeTool("jira.create_issue", evil),
+                "AC-07：处理器异常不外抛");
+        Map<String, Object> err = expectError(result, MockMCPProvider.CODE_INTERNAL);
+        String message = ((Map<?, ?>) err.get("error")).get("message").toString();
+        assertEquals("mock 工具内部错误（详情见服务端日志）", message, "T10：固定文案（MCP-S4）");
+        assertFalse(message.contains("内部路径泄露"), "不回显异常明细");
+        assertFalse(err.toString().contains("secret.yml"), "响应体不含内部路径");
+    }
+
+    @Test
+    @DisplayName("T10 桶上限: 每租户每实体桶 10,000 条，达上限 create 返回 -32005 结构化错误")
+    void T10_桶上限10k_达上限结构化错误不抛异常() {
+        // jira.create_issue 连续灌满 10,000 条（仅本租户桶），第 10,001 条 → CODE_CAPACITY
+        for (int i = 0; i < MockMCPProvider.BUCKET_CAP; i++) {
+            Object r = provider.invokeTool("jira.create_issue", Map.of("summary", "s" + i));
+            assertNull(asMap(r).get("error"), "灌桶阶段不应出错: i=" + i);
+        }
+        Map<String, Object> rejected = expectError(
+                provider.invokeTool("jira.create_issue", Map.of("summary", "overflow")),
+                MockMCPProvider.CODE_CAPACITY);
+        assertTrue(rejected.get("error").toString().contains("10"), "错误文案含上限值");
+        // list 仍可见恰好 10,000 条（已存数据不受影响）
+        Map<String, Object> list = asMap(provider.invokeTool("jira.list_issues", Map.of()));
+        assertEquals(MockMCPProvider.BUCKET_CAP, ((List<?>) list.get("issues")).size());
+        // 其他实体桶/其他租户不受本桶影响
+        assertNotNull(asMap(provider.invokeTool("confluence.create_page",
+                Map.of("title", "t", "content", "c"))).get("id"), "pages 桶独立计数");
+        asTenant(T2, () -> {
+            Map<String, Object> other = asMap(provider.invokeTool("jira.create_issue", Map.of("summary", "T2")));
+            assertNull(other.get("error"), "他租户桶独立计数（AC-05 隔离）");
+            return null;
+        });
+    }
 }

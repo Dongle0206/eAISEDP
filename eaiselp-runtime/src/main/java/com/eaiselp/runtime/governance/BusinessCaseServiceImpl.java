@@ -95,7 +95,8 @@ public class BusinessCaseServiceImpl extends ServiceImpl<BusinessCaseMapper, Bus
         Computed computed = validateForWrite(patch);
         applyComputed(patch, computed);
         try {
-            // 显式 set：payback/roi 可为 NULL（N/A 边界），updateById 忽略 null 会让旧计算值残留
+            // 显式 set：payback/roi 可为 NULL（N/A 边界），updateById 忽略 null 会让旧计算值残留；
+            // update_by 显式携带当前用户（T7：wrapper 更新不触发填充，空则 system）
             update(new LambdaUpdateWrapper<BusinessCase>()
                     .eq(BusinessCase::getId, id)
                     .set(BusinessCase::getCaseName, patch.getCaseName())
@@ -113,11 +114,21 @@ public class BusinessCaseServiceImpl extends ServiceImpl<BusinessCaseMapper, Bus
                     .set(BusinessCase::getEffort, patch.getEffort())
                     .set(BusinessCase::getRiceScore, patch.getRiceScore())
                     // status/rejectedReason/decisionNote 不在编辑改写（流转/B6 专属）
+                    .set(BusinessCase::getUpdateBy, operatorOrSystem())
             );
         } catch (DuplicateKeyException e) {
             throw new BizException(400, "案例已存在: " + patch.getCaseName());
         }
         Map<String, Object> detail = writeDetail(patch);
+        // 审计补 old→new 快照（case-20260824 T1，对齐 ComplianceCheckServiceImpl.edit 先例）：
+        // 金额三字段与 RICE 四因子前值留痕（新值已在 writeDetail；计算列由因子重算可推导）
+        detail.put("oldOnetimeCost", exist.getOnetimeCost());
+        detail.put("oldAnnualOpCost", exist.getAnnualOpCost());
+        detail.put("oldAnnualBenefit", exist.getAnnualBenefit());
+        detail.put("oldReach", exist.getReach());
+        detail.put("oldImpact", exist.getImpact());
+        detail.put("oldConfidence", exist.getConfidence());
+        detail.put("oldEffort", exist.getEffort());
         detail.put("operator", operatorName());
         audit("bizcase_update", id, detail);
         return getById(id);
@@ -201,7 +212,8 @@ public class BusinessCaseServiceImpl extends ServiceImpl<BusinessCaseMapper, Bus
         }
         update(new LambdaUpdateWrapper<BusinessCase>()
                 .eq(BusinessCase::getId, id)
-                .set(BusinessCase::getDecisionNote, decisionNote));
+                .set(BusinessCase::getDecisionNote, decisionNote)
+                .set(BusinessCase::getUpdateBy, operatorOrSystem()));
         // 审计 detail 含旧值→新值（覆盖式唯一留痕，AC-AUDIT.1）
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("caseName", exist.getCaseName());
@@ -239,11 +251,21 @@ public class BusinessCaseServiceImpl extends ServiceImpl<BusinessCaseMapper, Bus
                 && (rejectedReason == null || rejectedReason.isBlank())) {
             throw new BizException(400, "rejectedReason 必填（拒绝案例必须填写原因）");
         }
-        update(new LambdaUpdateWrapper<BusinessCase>()
+        // 长度前置校验（case-20260824 T4：V7 rejected_reason VARCHAR(500)，超长 400 指名）
+        if (rejectedReason != null && rejectedReason.trim().length() > 500) {
+            throw new BizException(400, "rejectedReason 长度不能超过 500 字符");
+        }
+        // CAS（case-20260824 T2）：.eq(status, from) 防并发互覆，行数 0 → 400 刷新重试
+        boolean updated = update(new LambdaUpdateWrapper<BusinessCase>()
                 .eq(BusinessCase::getId, id)
+                .eq(BusinessCase::getStatus, from.dbValue())
                 .set(BusinessCase::getStatus, to.dbValue())
                 .set(BusinessCase::getRejectedReason,
-                        to == BizCaseStatus.REJECTED ? rejectedReason.trim() : null));
+                        to == BizCaseStatus.REJECTED ? rejectedReason.trim() : null)
+                .set(BusinessCase::getUpdateBy, operatorOrSystem()));
+        if (!updated) {
+            throw new BizException(400, "案例状态已变更（并发流转冲突），请刷新重试: " + id);
+        }
         // 审计（§8.1）：from→to + 操作者 + rejectedReason/decisionNote 快照 + 计算字段
         Map<String, Object> detail = writeDetail(exist);
         detail.put("from", from.dbValue());
@@ -428,6 +450,11 @@ public class BusinessCaseServiceImpl extends ServiceImpl<BusinessCaseMapper, Bus
         detail.put("paybackYears", bizCase.getPaybackYears());
         detail.put("roiPercent", bizCase.getRoiPercent());
         detail.put("riceScore", bizCase.getRiceScore());
+        // RICE 四因子（case-20260824 T1：edit 审计 old→new 快照需新值在场）
+        detail.put("reach", bizCase.getReach());
+        detail.put("impact", bizCase.getImpact());
+        detail.put("confidence", bizCase.getConfidence());
+        detail.put("effort", bizCase.getEffort());
         detail.put("relatedStrategyIds", parseStrategyIds(bizCase.getRelatedStrategyIds()));
         return detail;
     }
@@ -441,6 +468,15 @@ public class BusinessCaseServiceImpl extends ServiceImpl<BusinessCaseMapper, Bus
     private static String operatorName() {
         JwtClaims claims = LoginUser.get();
         return claims != null ? claims.getUsername() : null;
+    }
+
+    /**
+     * update_by 落库值（case-20260824 T7）：当前登录用户名；无登录上下文兜底 "system"
+     * （对齐 V4~V8 审计列语义，与 RiskServiceImpl 同款）。
+     */
+    static String operatorOrSystem() {
+        JwtClaims claims = LoginUser.get();
+        return claims != null && claims.getUsername() != null ? claims.getUsername() : "system";
     }
 
     private void audit(String action, Long id, Object detail) {

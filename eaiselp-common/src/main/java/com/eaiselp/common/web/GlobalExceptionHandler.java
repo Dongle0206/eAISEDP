@@ -8,10 +8,12 @@ import com.eaiselp.common.result.ResultCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /** 全局异常处理：BizException→对应 code；校验异常→40001；未知→50000。 */
 @Slf4j
@@ -27,6 +29,29 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public R<Void> handleValid(MethodArgumentNotValidException e) {
         return R.fail(ResultCode.BAD_CREDENTIAL, "用户名或密码错误");
+    }
+
+    /**
+     * 请求体不可读（case-20260824-技术债清偿 T5，平台-S6）：坏 JSON / 缺 body / 类型不匹配的
+     * {@code @RequestBody} 反序列化失败原先落入兜底 handler → 50000（客户端错误被当服务端错误）。
+     * 归位 400（语义增强兼容：原本就是失败响应，仅 code/msg 修正），不回显解析器内部细节。
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public R<Void> handleNotReadable(HttpMessageNotReadableException e) {
+        log.warn("[NotReadable] 请求体格式错误: {}", e.getMessage());
+        return R.fail(400, "请求体格式错误");
+    }
+
+    /**
+     * 方法参数类型不匹配（T5 同径）：如 {@code /api/v1/xxx/{id}} 传非数字——
+     * 客户端参数错误归位 400，指名参数与目标类型，不泄露内部堆栈。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public R<Void> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        String paramName = e.getName();
+        log.warn("[TypeMismatch] 参数类型错误: name={}, value={}", paramName,
+                e.getValue() != null ? String.valueOf(e.getValue()) : null);
+        return R.fail(400, "请求参数类型错误: " + paramName);
     }
 
     @ExceptionHandler(Exception.class)

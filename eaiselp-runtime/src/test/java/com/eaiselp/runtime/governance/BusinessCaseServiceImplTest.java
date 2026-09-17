@@ -542,4 +542,85 @@ class BusinessCaseServiceImplTest {
         assertEquals(0, vo.getSummary().getTotalThreeYearNetBenefit().compareTo(BigDecimal.ZERO));
         assertEquals(0L, vo.getStatusDistribution().get("draft"), "空集五态全 0");
     }
+
+    // ==================== case-20260824-技术债清偿：T1 审计快照 / T2 CAS / T4 长度 / T7 update_by ====================
+
+    @Test
+    void T1_编辑审计含金额与RICE因子的old到new快照() {
+        // 库中 {成本100/运营20/收益60, R5,I3,C0.8,E6} → 编辑为 {成本200/运营20/收益120, R8,I3,C0.8,E3}
+        BusinessCase before = stored(5101L, "draft");
+        when(baseMapper.selectById(5101L)).thenReturn(before, before);
+        stubUpdateOk();
+
+        BusinessCase patch = new BusinessCase();
+        patch.setCaseName("数据中台建设");
+        patch.setOnetimeCost(new BigDecimal("200"));
+        patch.setAnnualOpCost(new BigDecimal("20"));
+        patch.setAnnualBenefit(new BigDecimal("120"));
+        patch.setReach(new BigDecimal("8"));
+        patch.setImpact(new BigDecimal("3"));
+        patch.setConfidence(new BigDecimal("0.8"));
+        patch.setEffort(new BigDecimal("3"));
+        service.edit(5101L, patch);
+
+        ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
+        verify(auditService).log(eq("bizcase_update"), eq("bizcase"), eq("5101"), detail.capture());
+        String json = detail.getValue();
+        // 金额三字段前值
+        assertTrue(json.contains("\"oldOnetimeCost\":100"), "前值金额留痕: " + json);
+        assertTrue(json.contains("\"oldAnnualBenefit\":60"), json);
+        // RICE 四因子前值
+        assertTrue(json.contains("\"oldReach\":5"), json);
+        assertTrue(json.contains("\"oldImpact\":3"), json);
+        assertTrue(json.contains("\"oldConfidence\":0.8"), json);
+        assertTrue(json.contains("\"oldEffort\":6"), json);
+        // 后值（writeDetail 新值）
+        assertTrue(json.contains("\"onetimeCost\":200"), "新值金额: " + json);
+        assertTrue(json.contains("\"annualBenefit\":120"), json);
+        assertTrue(json.contains("\"reach\":8"), json);
+        assertTrue(json.contains("\"effort\":3"), json);
+    }
+
+    @Test
+    void T2_并发互覆_两次transit同from_第二次行数0抛400() {
+        // 两并发都读到 draft→approved；第一笔改走 status 后，第二笔 .eq(status,draft) 命中 0 行
+        when(baseMapper.selectById(5110L)).thenReturn(stored(5110L, "draft"));
+        when(baseMapper.update(any(), any())).thenReturn(1, 0);
+
+        service.transit(5110L, "approved", null);
+        BizException ex = assertThrows(BizException.class, () -> service.transit(5110L, "approved", null));
+
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("已变更"), "并发冲突文案，实际: " + ex.getMessage());
+        verify(auditService, times(1)).log(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void T4_rejectedReason超500_400指名() {
+        when(baseMapper.selectById(5111L)).thenReturn(stored(5111L, "draft"));
+        stubUpdateOk();
+
+        BizException ex = assertThrows(BizException.class,
+                () -> service.transit(5111L, "rejected", "因".repeat(501)));
+        assertEquals(400, ex.getCode());
+        assertTrue(ex.getMessage().contains("rejectedReason"), "指名字段，实际: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("500"));
+        verify(baseMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void T7_edit与transit落库_update_by无登录兜底system() {
+        when(baseMapper.selectById(5112L)).thenReturn(stored(5112L, "draft"), stored(5112L, "approved"));
+        stubUpdateOk();
+
+        service.transit(5112L, "approved", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper<BusinessCase>> cap =
+                ArgumentCaptor.forClass(com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper.class);
+        verify(baseMapper).update(any(), cap.capture());
+        assertTrue(cap.getValue().getParamNameValuePairs().containsValue("system"),
+                "transit wrapper 显式 set update_by（T7），无登录兜底 system，params: "
+                        + cap.getValue().getParamNameValuePairs());
+    }
 }

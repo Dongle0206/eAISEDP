@@ -1,10 +1,13 @@
 package com.eaiselp.runtime.governance;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.eaiselp.common.exception.BizException;
+import com.eaiselp.common.security.JwtClaims;
+import com.eaiselp.common.security.LoginUser;
 import com.eaiselp.data.audit.AuditService;
 import com.eaiselp.runtime.governance.dto.StandardVo;
 import com.eaiselp.runtime.hierarchy.ArchitecturePrinciple;
@@ -260,11 +263,20 @@ public class StandardServiceImpl extends ServiceImpl<StandardMapper, Standard> i
         if (to == StandardStatus.PUBLISHED) {
             supersededVersion = autoDeprecateCurrentPublished(exist.getStandardCode(), exist.getVersion());
         }
-        Standard next = new Standard();
-        next.setId(id);
-        next.setStatus(to.dbValue());
-        next.setDeprecateReason(to == StandardStatus.DEPRECATED ? deprecateReason : null);
-        updateById(next);
+        // CAS（case-20260824 T6，同 T2 模式）：UPDATE 追加 .eq(status, from) 防并发互覆
+        // （两个 draft→published 并发等场景），行数 0 → 400 刷新重试；显式 set 承载
+        // deprecateReason 置空语义（原 updateById 忽略 null 会让旧废弃原因残留）；
+        // update_by 显式携带当前用户（T7：wrapper 不触发填充，空则 system）
+        boolean updated = update(new LambdaUpdateWrapper<Standard>()
+                .eq(Standard::getId, id)
+                .eq(Standard::getStatus, from.dbValue())
+                .set(Standard::getStatus, to.dbValue())
+                .set(Standard::getDeprecateReason,
+                        to == StandardStatus.DEPRECATED ? deprecateReason : null)
+                .set(Standard::getUpdateBy, operatorOrSystem()));
+        if (!updated) {
+            throw new BizException(400, "标准状态已变更（并发流转冲突），请刷新重试: " + id);
+        }
         // 审计 standard_transit：from→to + deprecateReason + 被取代链（§8.1 清单）
         Map<String, Object> detail = new LinkedHashMap<>();
         detail.put("standardCode", exist.getStandardCode());
@@ -398,6 +410,15 @@ public class StandardServiceImpl extends ServiceImpl<StandardMapper, Standard> i
         if (value == null || value.isBlank()) {
             throw new BizException(400, field + " 不能为空");
         }
+    }
+
+    /**
+     * update_by 落库值（case-20260824 T7）：当前登录用户名；无登录上下文兜底 "system"
+     * （对齐 V4~V8 审计列语义，与 RiskServiceImpl 同款）。
+     */
+    static String operatorOrSystem() {
+        JwtClaims claims = LoginUser.get();
+        return claims != null && claims.getUsername() != null ? claims.getUsername() : "system";
     }
 
     /** standardCode 生成 + uk 兜底重试（≤3 次，复刻 AdrServiceImpl.insertWithCodeRetry）。 */
